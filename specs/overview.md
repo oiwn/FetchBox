@@ -48,7 +48,6 @@ This document indexes the current specifications and captures the overarching ar
 - Future auth/rate-limiting strategy (tracked as future work in requirements spec).
 
 ## References
-- `current_task.md` — high-level task summary, architecture outline, backlog.
 - `README.md` — will link to finished docs as they land.
 
 Keep this overview updated as specs evolve or new tasks emerge.
