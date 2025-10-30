@@ -5,6 +5,8 @@ Define FetchBox’s external contract so future PRs can implement the system wit
 
 ## 1. Client-Facing Ingest (`POST /jobs`)
 
+> Implementation note: the Axum service runs as the `fetchbox api` subcommand of the unified CLI binary.
+
 ### Endpoint
 - Method: `POST`
 - Path: `/jobs`

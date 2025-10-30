@@ -1,8 +1,8 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- Root-level packages (`fetchbox_api/`, `fetchbox_worker/`, `fetchbox_plugins/`, etc.) participate in the top-level Cargo workspace (see `Cargo.toml` `[workspace]` members).
-- `src/` currently holds placeholder code; future shared libraries can live at root as well (`fetchbox_storage/`, `fetchbox_ledger/`).
+- The repository builds a single CLI binary `fetchbox`; `src/main.rs` will dispatch subcommands (`api`, `worker`, etc.) into modules under `src/`.
+- Shared functionality should live inside the crate’s module tree (`src/api`, `src/worker`, `src/config`, …); add additional crates later only if needed.
 - `specs/` contains task-by-task specifications; treat each `specs/task_XX.md` as the contract before coding.
 - `specs/current_task.md` records the active architecture context and backlog; update it as we refine requirements.
 - `docs/` mirrors polished specs (`docs/requirements.md`, `docs/messaging.md`, etc.) for operators.
@@ -16,7 +16,7 @@
 - `make dev-up` / `make dev-down` (once added) — spin up/down Iggy + MinIO via Docker Compose for end-to-end testing.
 
 ## Coding Style & Naming Conventions
-- Rust edition 2021, enforced via `rustfmt.toml`; prefer 4-space indentation and trailing commas in multi-line structures.
+- Rust edition 2024, enforced via `rustfmt.toml`; prefer 4-space indentation and trailing commas in multi-line structures.
 - Module names use `snake_case`; public types and traits use `CamelCase`.
 - Feature flags default to off; enable via `--features`.
 - Keep handler paths fully-qualified (e.g., `fetchbox_handlers::gallery::GalleryHandler`) to match config expectations.

@@ -42,6 +42,11 @@ This document indexes the current specifications and captures the overarching ar
 3. Nail messaging schemas + proto generation (`task_03`).
 4. Build config system (`task_05`) to power API + worker.
 
+## Implementation Notes
+- The repository starts as a single binary crate `fetchbox`; `src/main.rs` will expose CLI subcommands (e.g., `fetchbox api`, `fetchbox worker`) that wire into modules under `src/`.
+- Shared code (config, storage, messaging helpers) should be implemented as modules within the crate; additional workspace members can be introduced later if the surface area grows.
+- Deployment model: ship one container image and run different subcommands per workload (`fetchbox api` for ingress, `fetchbox worker` for download workers). Worker replicas scale horizontally.
+
 ## Outstanding Questions
 - Fjall writer topology (single writer via status consumer vs multi-writer) — clarify in `task_04`.
 - Direct Iggy producer responsibilities (validation, Fjall mirroring).

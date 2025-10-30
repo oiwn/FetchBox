@@ -1,7 +1,7 @@
 # Spec: Downloader Worker Core
 
 ## Goal
-Implement the worker service that consumes `jobs.tasks`, downloads resources (respecting proxy configuration and handler hints), uploads them to S3-compatible storage, and emits status/log events.
+Implement the worker service (invoked via `fetchbox worker`) that consumes `jobs.tasks`, downloads resources (respecting proxy configuration and handler hints), uploads them to S3-compatible storage, and emits status/log events. Multiple worker replicas should run independently for horizontal scaling.
 
 ## Scope
 1. New crate/binary `crates/fetchbox_worker`.
