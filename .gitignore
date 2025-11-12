@@ -24,3 +24,17 @@ target
 # Added by cargo
 
 /target
+
+# Coverage reports
+lcov.info
+*.profraw
+*.profdata
+
+# Environment variables (secrets)
+.env
+specs/
+tmp/
+
+# FetchBox data directories
+data/
+config/fetchbox.toml

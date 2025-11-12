@@ -1,8 +1,8 @@
 mod cli;
-mod server;
 
 use clap::Parser;
 use cli::{Cli, Commands};
+use fetchbox::api;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -11,7 +11,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Server(args) => server::run(args.address).await?,
+        Commands::Api(args) => api::run(args.address, args.ledger_path).await?,
+        Commands::Worker => {
+            eprintln!("Worker mode is temporarily disabled during architecture transition");
+            std::process::exit(1);
+        }
     }
 
     Ok(())

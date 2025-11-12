@@ -1,0 +1,4 @@
+Hello from FetchBox integration test!
+This is a sample text file used for testing the download worker.
+Line 3: Testing multi-line content.
+Line 4: End of file.

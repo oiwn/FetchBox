@@ -1,0 +1,147 @@
+# FetchBox Configuration Example
+#
+# This file demonstrates all available configuration options.
+# Copy this to config/fetchbox.toml and customize for your deployment.
+#
+# Configuration can be overridden using environment variables:
+# FETCHBOX__SERVER__BIND_ADDR=0.0.0.0:9000
+# FETCHBOX__IGGY__ENDPOINT=iggy://prod-server:8090
+#
+# SECRETS MANAGEMENT:
+# Secrets are NEVER stored in this TOML file. Instead, use a .env file or
+# system environment variables. The following secrets are loaded:
+#
+# - S3_ACCESS_KEY or AWS_ACCESS_KEY_ID     - S3/MinIO access key
+# - S3_SECRET_KEY or AWS_SECRET_ACCESS_KEY - S3/MinIO secret key
+#
+# Create a .env file in the project root with:
+#   IGGY_CLIENT_SECRET=your-secret
+#   S3_ACCESS_KEY=your-access-key
+#   S3_SECRET_KEY=your-secret-key
+#
+
+# ============================================================================
+# Server Configuration
+# ============================================================================
+[server]
+# Address and port to bind the HTTP API server
+bind_addr = "0.0.0.0:8080"
+
+# Maximum manifest size (default: 5MB, enforced by validation)
+max_manifest_bytes = "5MB"
+
+# Path to Fjall ledger storage
+fjall_path = "data/ledger"
+
+# ============================================================================
+# Storage Configuration
+# ============================================================================
+[storage]
+# Storage provider: "s3" or "local"
+provider = "s3"
+
+# Default storage bucket
+bucket = "fetchbox-default"
+
+# S3/MinIO region (optional)
+region = "us-east-1"
+
+# S3/MinIO endpoint URL
+endpoint = "https://s3.amazonaws.com"
+
+# S3 credentials are loaded from environment variables:
+# S3_ACCESS_KEY (or AWS_ACCESS_KEY_ID)
+# S3_SECRET_KEY (or AWS_SECRET_ACCESS_KEY)
+
+# For local storage:
+# provider = "local"
+# bucket = "fetchbox-local"
+
+# ============================================================================
+# Handler Configurations
+# ============================================================================
+# Each handler processes specific types of manifests
+# At least one handler (named "default") is required
+
+[handlers.default]
+# Handler implementation path
+handler = "fetchbox_handlers::default::DefaultManifestHandler"
+
+# Proxy pool to use for this handler
+proxy_pool = "default"
+
+# Optional: Override storage bucket for this handler
+# storage_bucket = "fetchbox-custom"
+
+# Optional: Storage key prefix
+# key_prefix = "default/"
+
+# Optional: Default headers for all requests
+# [handlers.default.default_headers]
+# User-Agent = "FetchBox/1.0"
+
+# Optional: Handler-specific options (JSON)
+# [handlers.default.options]
+# max_retries = 5
+
+[handlers.gallery]
+handler = "fetchbox_handlers::gallery::GalleryHandler"
+proxy_pool = "gallery"
+storage_bucket = "fetchbox-gallery"
+
+[handlers.gallery.default_headers]
+User-Agent = "FetchBox/1.0"
+
+# ============================================================================
+# Proxy Pool Configurations
+# ============================================================================
+# Define proxy pools with fallback chains
+
+[proxy.pools.default]
+# Primary proxy URIs (tried in order)
+primary = ["http://proxy-a:8080", "http://proxy-b:8080"]
+
+# Fallback pools (references to other pool names)
+fallbacks = ["global"]
+
+# Retry backoff in milliseconds
+retry_backoff_ms = 500
+
+# Maximum retry attempts
+max_retries = 3
+
+[proxy.pools.gallery]
+primary = ["http://gallery-proxy-1:8080", "http://gallery-proxy-2:8080"]
+fallbacks = ["global"]
+retry_backoff_ms = 1000
+max_retries = 5
+
+[proxy.pools.global]
+# Global fallback pool (no further fallbacks)
+primary = ["http://global-proxy-1:8080", "http://global-proxy-2:8080"]
+fallbacks = []
+retry_backoff_ms = 500
+max_retries = 3
+
+# ============================================================================
+# Retention Configuration
+# ============================================================================
+[retention]
+# Job retention in days
+job_ttl_days = 30
+
+# Maximum ledger size
+ledger_max_bytes = "50GB"
+
+# Log retention in days
+logs_ttl_days = 30
+
+# ============================================================================
+# Telemetry Configuration
+# ============================================================================
+[telemetry]
+# Metrics server address (for Prometheus scraping)
+metrics_addr = "0.0.0.0:9090"
+
+# Optional: OpenTelemetry collector endpoint
+otlp_endpoint = "http://otel-collector:4317"
