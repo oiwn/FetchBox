@@ -11,13 +11,20 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Run the HTTP server (stub implementation)
-    Server(ServerArgs),
+    /// Run the FetchBox API service
+    Api(ApiArgs),
+
+    /// Run the FetchBox download worker
+    Worker,
 }
 
 #[derive(clap::Args, Debug)]
-pub struct ServerArgs {
-    /// Address to bind the HTTP server to
+pub struct ApiArgs {
+    /// Address to bind the API server to
     #[arg(long, default_value = "0.0.0.0:8080")]
     pub address: SocketAddr,
+
+    /// Path to Fjall ledger storage
+    #[arg(long, default_value = "data/ledger")]
+    pub ledger_path: String,
 }
