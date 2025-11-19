@@ -6,14 +6,12 @@ use tracing::{debug, info};
 use crate::api::models::JobSnapshot;
 
 use super::error::Result;
-use super::partitions::{
-    encode_idem_key, encode_job_key, encode_log_key, encode_log_prefix, encode_meta_key,
-};
-use super::pruning::{prune_expired, PruneStats};
+use super::partitions::{encode_idem_key, encode_job_key};
+use super::pruning::{PruneStats, prune_expired};
 
-/// Fjall-backed persistent storage for job snapshots, logs, and metadata
+/// Fjall-backed DAO for job snapshots, logs, and idempotency metadata
 #[derive(Clone)]
-pub struct FjallStore {
+pub struct LedgerStorage {
     keyspace: Keyspace,
     jobs: PartitionHandle,
     logs: PartitionHandle,
@@ -21,27 +19,28 @@ pub struct FjallStore {
     metadata: PartitionHandle,
 }
 
-impl FjallStore {
-    /// Open or create a Fjall store at the given path
+impl LedgerStorage {
+    /// Open or create a ledger database at the given path
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
-        info!("Opening Fjall store at: {}", path.display());
+        info!("Opening ledger database at: {}", path.display());
 
-        // Create parent directory if it doesn't exist
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        // Open or create keyspace
         let keyspace = Config::new(path).open()?;
 
-        // Create partitions
-        let jobs = keyspace.open_partition("jobs", PartitionCreateOptions::default())?;
-        let logs = keyspace.open_partition("logs", PartitionCreateOptions::default())?;
-        let idempotency = keyspace.open_partition("idempotency", PartitionCreateOptions::default())?;
-        let metadata = keyspace.open_partition("metadata", PartitionCreateOptions::default())?;
+        let jobs =
+            keyspace.open_partition("jobs", PartitionCreateOptions::default())?;
+        let logs =
+            keyspace.open_partition("logs", PartitionCreateOptions::default())?;
+        let idempotency = keyspace
+            .open_partition("idempotency", PartitionCreateOptions::default())?;
+        let metadata = keyspace
+            .open_partition("metadata", PartitionCreateOptions::default())?;
 
-        info!("Fjall store opened successfully");
+        info!("Ledger database opened successfully");
         Ok(Self {
             keyspace,
             jobs,
@@ -72,6 +71,19 @@ impl FjallStore {
         }
     }
 
+    /// List job snapshots up to the provided limit in key order
+    pub fn list_jobs(&self, limit: usize) -> Result<Vec<JobSnapshot>> {
+        let mut jobs = Vec::new();
+
+        for entry in self.jobs.iter().take(limit) {
+            let (_, value) = entry?;
+            let snapshot = serde_json::from_slice(value.as_ref())?;
+            jobs.push(snapshot);
+        }
+
+        Ok(jobs)
+    }
+
     /// Remember an idempotency key -> job_id mapping
     pub fn remember_idempotency(&self, key: String, job_id: String) -> Result<()> {
         let idem_key = encode_idem_key(&key);
@@ -94,7 +106,7 @@ impl FjallStore {
 
     /// Prune expired entries based on retention policies
     pub fn prune_expired(&self) -> Result<PruneStats> {
-        info!("Starting pruning process");
+        info!("Starting ledger pruning process");
         let stats = prune_expired(
             &self.keyspace,
             &self.jobs,
@@ -151,38 +163,36 @@ pub struct StoreStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::models::JobStatus;
+    use crate::api::models::{JobSnapshot, JobStatus};
     use tempfile::TempDir;
 
-    fn create_test_store() -> (FjallStore, TempDir) {
+    fn create_test_store() -> (LedgerStorage, TempDir) {
         let temp_dir = TempDir::new().unwrap();
-        let store = FjallStore::open(temp_dir.path().join("test_ledger")).unwrap();
+        let store =
+            LedgerStorage::open(temp_dir.path().join("test_ledger")).unwrap();
         (store, temp_dir)
     }
 
     fn create_test_snapshot(job_id: &str) -> JobSnapshot {
-        let now = time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .unwrap();
+        let now = chrono::Utc::now();
         JobSnapshot {
             job_id: job_id.to_string(),
-            job_type: "test".to_string(),
             status: JobStatus::Queued,
-            created_at: now.clone(),
+            created_at: now,
             updated_at: now,
             resource_total: 10,
             resource_completed: 0,
             resource_failed: 0,
             manifest_key: "manifests/test.json".to_string(),
             errors: Vec::new(),
-            tenant: Some("test-tenant".to_string()),
+            tenant: "test-tenant".to_string(),
         }
     }
 
     #[test]
     fn test_open_store() {
         let temp_dir = TempDir::new().unwrap();
-        let store = FjallStore::open(temp_dir.path().join("test_ledger"));
+        let store = LedgerStorage::open(temp_dir.path().join("test_ledger"));
         assert!(store.is_ok());
     }
 
@@ -197,8 +207,20 @@ mod tests {
         assert!(retrieved.is_some());
         let retrieved = retrieved.unwrap();
         assert_eq!(retrieved.job_id, "job_123");
-        assert_eq!(retrieved.job_type, "test");
         assert_eq!(retrieved.resource_total, 10);
+    }
+
+    #[test]
+    fn test_list_jobs_returns_inserted_snapshots() {
+        let (store, _temp) = create_test_store();
+
+        for idx in 0..3 {
+            let job_id = format!("job_{idx}");
+            store.upsert(create_test_snapshot(&job_id)).unwrap();
+        }
+
+        let jobs = store.list_jobs(10).unwrap();
+        assert_eq!(jobs.len(), 3);
     }
 
     #[test]
@@ -244,7 +266,6 @@ mod tests {
         let snapshot = create_test_snapshot("job_persist");
         store.upsert(snapshot).unwrap();
 
-        // Persist should not error
         store.persist().unwrap();
     }
 }

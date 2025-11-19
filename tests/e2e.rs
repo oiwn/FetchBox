@@ -1,509 +1,314 @@
-//! End-to-end integration tests for FetchBox
-//!
-//! These tests verify the complete system flow:
-//! 1. Publish DownloadTask to Iggy
-//! 2. Worker consumes task from Iggy
-//! 3. Worker downloads resource from HTTP server
-//! 4. Worker uploads to storage
-//! 5. Verify content matches original
-//!
-//! Prerequisites:
-//! - Iggy server running on localhost:8090
-//! - Run via: `just test-e2e`
+//! End-to-end job ingestion test (single-process runtime)
+//! Runs the Axum API with in-memory storage, TaskBroker, and mock workers.
 
-use axum::{routing::get, Router};
-use bytes::Bytes;
-use fetchbox::messaging::iggy::{ConsumerConfig, FetchboxConsumer, FetchboxProducer, RetryPolicy};
-use fetchbox::proto::{DownloadTask, HttpHeader};
+use axum::{
+    Router,
+    body::Body,
+    http::{Request, StatusCode},
+    routing::get,
+};
+use fetchbox::api::{
+    models::{JobAcceptedResponse, JobSnapshot},
+    services::{get_job, ingest_job},
+    state::AppState,
+};
+use fetchbox::config::Config;
+use fetchbox::handlers::HandlerRegistry;
+use fetchbox::ledger::LedgerStorage;
+use fetchbox::queue::{DlqStorage, TaskBroker, TasksStorage};
 use fetchbox::storage::StorageClient;
-use fetchbox::streams::{JOBS_TASKS, CONSUMER_GROUP_WORKERS};
-use fetchbox::worker::runner;
-use iggy::client::{Client, StreamClient, TopicClient};
-use iggy::clients::client::IggyClient;
-use iggy::compression::compression_algorithm::CompressionAlgorithm;
-use iggy::identifier::Identifier;
-use iggy::utils::expiry::IggyExpiry;
-use iggy::utils::topic_size::MaxTopicSize;
-use std::net::SocketAddr;
+use fetchbox::worker::{DownloadWorker, WorkerConfig, WorkerContext};
+use http_body_util::BodyExt;
+use serde_json::json;
 use std::sync::Arc;
-use tokio::time::{sleep, timeout, Duration};
-use uuid::Uuid;
+use tempfile::TempDir;
+use tokio::{
+    net::TcpListener,
+    sync::{Mutex as TokioMutex, RwLock, watch},
+    task::JoinHandle,
+    time::{Duration, sleep, timeout},
+};
+use tower::ServiceExt;
+use tower_http::decompression::RequestDecompressionLayer;
 
-/// Test context holding all shared resources
-struct E2EContext {
-    producer: Arc<FetchboxProducer>,
-    consumer: FetchboxConsumer<DownloadTask>,
-    storage: Arc<StorageClient>,
-    mock_server_url: String,
-    iggy_endpoint: String,
+#[tokio::test]
+async fn job_ingest_dispatches_tasks_end_to_end() {
+    let ctx = E2EHarness::new().await;
+    let manifest = sample_manifest(&ctx.http_server.base_url);
+    let resource_count = manifest["resources"].as_array().unwrap().len();
+
+    let response = ctx.submit_job(manifest).await;
+    assert_eq!(response.resource_count, resource_count);
+
+    let snapshot = ctx
+        .wait_for_completion(&response.job_id, resource_count)
+        .await;
+    assert_eq!(snapshot.resource_completed, resource_count);
+    assert_eq!(snapshot.resource_total, resource_count);
+    assert_eq!(snapshot.tenant, "test-tenant");
 }
 
-impl E2EContext {
-    /// Initialize test context
-    async fn setup() -> Result<Self, Box<dyn std::error::Error>> {
-        let iggy_endpoint = std::env::var("IGGY_ENDPOINT")
-            .unwrap_or_else(|_| "iggy://iggy:iggy@127.0.0.1:8090".to_string());
-
-        println!("Connecting to Iggy at: {}", iggy_endpoint);
-
-        // Connect producer
-        let producer = FetchboxProducer::connect(&iggy_endpoint, RetryPolicy::default())
-            .await
-            .map_err(|e| format!("Failed to connect producer: {}", e))?;
-
-        println!("Producer connected");
-
-        // Setup streams
-        setup_iggy_streams(&producer, &iggy_endpoint).await?;
-
-        println!("Streams configured");
-
-        // Connect consumer
-        let consumer_config = ConsumerConfig {
-            stream: "jobs".to_string(),
-            topic: "tasks".to_string(),
-            consumer_group: CONSUMER_GROUP_WORKERS.to_string(),
-            batch_size: 10,
-            auto_commit: true,
-        };
-
-        let consumer = FetchboxConsumer::<DownloadTask>::connect(&iggy_endpoint, consumer_config)
-            .await
-            .map_err(|e| format!("Failed to connect consumer: {}", e))?;
-
-        println!("Consumer connected");
-
-        // Create in-memory storage
-        let storage = Arc::new(StorageClient::in_memory());
-
-        // Start mock HTTP server
-        let mock_server_url = start_mock_server().await?;
-
-        println!("Mock HTTP server started at: {}", mock_server_url);
-
-        Ok(Self {
-            producer: Arc::new(producer),
-            consumer,
-            storage,
-            mock_server_url,
-            iggy_endpoint,
-        })
-    }
-
-    /// Create a test download task
-    fn create_task(&self, resource_id: &str, file_path: &str) -> DownloadTask {
-        let job_id = format!("test-job-{}", Uuid::new_v4());
-        let url = format!("{}/{}", self.mock_server_url, file_path);
-
-        DownloadTask {
-            job_id: job_id.clone(),
-            job_type: "test".to_string(),
-            resource_id: resource_id.to_string(),
-            url,
-            headers: vec![],
-            proxy_hint: None,
-            storage_hint: None,
-            attributes: None,
-            manifest_key: format!("s3://test-bucket/manifests/{}.json", job_id),
-            attempt: 1,
-            tenant: "test-tenant".to_string(),
-            trace_id: Uuid::new_v4().to_string(),
-        }
-    }
+struct E2EHarness {
+    router: Router,
+    ledger: Arc<LedgerStorage>,
+    dlq: Arc<DlqStorage>,
+    http_server: MockHttpServer,
+    _temp_dir: TempDir,
+    worker_handles: Vec<JoinHandle<()>>,
+    shutdown_tx: watch::Sender<bool>,
 }
 
-/// Setup Iggy streams (idempotent)
-async fn setup_iggy_streams(
-    producer: &FetchboxProducer,
-    endpoint: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Connect raw Iggy client for stream management
-    let endpoint_without_protocol = endpoint.strip_prefix("iggy://").unwrap_or(endpoint);
-    
-    // Extract server address (remove credentials if present)
-    let server_address = if let Some(at_pos) = endpoint_without_protocol.find('@') {
-        &endpoint_without_protocol[at_pos + 1..]
-    } else {
-        endpoint_without_protocol
-    }.to_string();
-    
-    let client = IggyClient::builder()
-        .with_tcp()
-        .with_server_address(server_address)
-        .build()
-        .map_err(|e| format!("Failed to create Iggy client: {}", e))?;
+impl E2EHarness {
+    async fn new() -> Self {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let ledger_path = temp_dir.path().join("ledger.fjall");
+        let tasks_path = temp_dir.path().join("tasks.fjall");
+        let dlq_path = temp_dir.path().join("dlq.fjall");
+        let http_server = MockHttpServer::start().await;
 
-    Client::connect(&client)
-        .await
-        .map_err(|e| format!("Failed to connect to Iggy: {}", e))?;
+        let ledger_storage =
+            LedgerStorage::open(&ledger_path).expect("open ledger");
+        let ledger = Arc::new(ledger_storage.clone());
 
-    // Authenticate with default credentials
-    use iggy::client::UserClient;
-    UserClient::login_user(&client, "iggy", "iggy")
-        .await
-        .map_err(|e| format!("Authentication failed: {}", e))?;
+        let tasks_storage =
+            TasksStorage::open(&tasks_path).expect("open task storage");
+        let tasks = Arc::new(RwLock::new(tasks_storage));
 
-    // Parse stream and topic from "jobs.tasks"
-    let stream_name = "jobs";
-    let topic_name = "tasks";
+        let dlq = Arc::new(DlqStorage::open(&dlq_path).expect("open dlq storage"));
 
-    // Create stream if it doesn't exist
-    let stream_id = Identifier::from_str_value(stream_name)
-        .map_err(|e| format!("Invalid stream name: {}", e))?;
+        let config = create_test_config();
+        let registry = HandlerRegistry::with_defaults();
+        let storage_client = StorageClient::in_memory();
+        let worker_storage = storage_client.clone();
 
-    match StreamClient::get_stream(&client, &stream_id).await {
-        Ok(_) => {
-            println!("Stream '{}' already exists", stream_name);
-        }
-        Err(_) => {
-            println!("Creating stream '{}'", stream_name);
-            StreamClient::create_stream(&client, stream_name, Some(1))
-                .await
-                .map_err(|e| format!("Failed to create stream: {}", e))?;
-        }
-    }
+        let (broker, receivers) =
+            TaskBroker::new(tasks.clone(), dlq.clone(), 2, 16);
+        let broker = Arc::new(broker);
 
-    // Create topic if it doesn't exist
-    let topic_id = Identifier::from_str_value(topic_name)
-        .map_err(|e| format!("Invalid topic name: {}", e))?;
-
-    match TopicClient::get_topic(&client, &stream_id, &topic_id).await {
-        Ok(_) => {
-            println!("Topic '{}.{}' already exists", stream_name, topic_name);
-        }
-        Err(_) => {
-            println!("Creating topic '{}.{}'", stream_name, topic_name);
-            TopicClient::create_topic(
-                &client,
-                &stream_id,
-                topic_name,
-                8,
-                CompressionAlgorithm::None,
-                Some(1),
-                Some(1),
-                IggyExpiry::ServerDefault,
-                MaxTopicSize::ServerDefault,
+        let worker_config = WorkerConfig::default();
+        let ledger_lock = Arc::new(TokioMutex::new(()));
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut worker_handles = Vec::new();
+        for (idx, rx) in receivers.into_iter().enumerate() {
+            let worker_id = format!("worker-test-{}", idx);
+            let ledger_clone = ledger.clone();
+            let lock = ledger_lock.clone();
+            let dlq_clone = dlq.clone();
+            let shutdown = shutdown_rx.clone();
+            let storage = worker_storage.clone();
+            let config = worker_config.clone();
+            let context = WorkerContext {
+                ledger: ledger_clone,
+                ledger_lock: lock,
+                dlq: dlq_clone,
+                shutdown_rx: shutdown,
+            };
+            let worker = DownloadWorker::new(
+                worker_id.clone(),
+                rx,
+                storage,
+                context,
+                config,
             )
-            .await
-            .map_err(|e| format!("Failed to create topic: {}", e))?;
+            .expect("create test worker");
+
+            worker_handles.push(tokio::spawn(async move {
+                let _ = worker.run().await;
+            }));
+        }
+
+        let state =
+            AppState::new(config, registry, ledger_storage, storage_client, broker);
+
+        let router = Router::new()
+            .route("/jobs", axum::routing::post(ingest_job))
+            .route("/operators/jobs/{job_id}", get(get_job))
+            .with_state(state)
+            .layer(RequestDecompressionLayer::new());
+
+        Self {
+            router,
+            ledger,
+            dlq,
+            http_server,
+            _temp_dir: temp_dir,
+            worker_handles,
+            shutdown_tx,
         }
     }
 
-    // Create additional streams for status, logs, dlq (simplified for MVP)
-    // For now we only need jobs.tasks to test the worker
+    async fn submit_job(&self, manifest: serde_json::Value) -> JobAcceptedResponse {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/jobs")
+            .header("content-type", "application/json")
+            .header("x-fetchbox-tenant", "test-tenant")
+            .body(Body::from(manifest.to_string()))
+            .unwrap();
 
-    Client::disconnect(&client)
-        .await
-        .map_err(|e| format!("Failed to disconnect: {}", e))?;
+        let response = self.router.clone().oneshot(request).await.expect("request");
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
 
-    Ok(())
-}
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        serde_json::from_slice(&bytes).expect("response json")
+    }
 
-/// Start embedded mock HTTP server serving test fixtures
-async fn start_mock_server() -> Result<String, Box<dyn std::error::Error>> {
-    let app = Router::new()
-        .route("/sample.txt", get(serve_sample_txt))
-        .route("/image.bin", get(serve_image_bin))
-        .route("/large.txt", get(serve_large_txt))
-        .route("/health", get(|| async { "OK" }));
-
-    // Bind to random available port
-    let addr = SocketAddr::from(([127, 0, 0, 1], 0));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    let bound_addr = listener.local_addr()?;
-
-    // Spawn server in background
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-
-    // Wait a bit for server to start
-    sleep(Duration::from_millis(100)).await;
-
-    Ok(format!("http://{}", bound_addr))
-}
-
-/// Handler for /sample.txt
-async fn serve_sample_txt() -> Bytes {
-    Bytes::from_static(include_bytes!("fixtures/sample.txt"))
-}
-
-/// Handler for /image.bin
-async fn serve_image_bin() -> Bytes {
-    Bytes::from_static(include_bytes!("fixtures/image.bin"))
-}
-
-/// Handler for /large.txt
-async fn serve_large_txt() -> Bytes {
-    Bytes::from_static(include_bytes!("fixtures/large.txt"))
-}
-
-/// Test: Basic publish and consume
-#[tokio::test]
-async fn test_publish_and_consume() {
-    let mut ctx = E2EContext::setup()
-        .await
-        .expect("Failed to setup test context");
-
-    // Create and publish task
-    let task = ctx.create_task("res-1", "sample.txt");
-    let job_id = task.job_id.clone();
-
-    println!("Publishing task for job: {}", job_id);
-    ctx.producer
-        .publish_download_task(&task)
-        .await
-        .expect("Failed to publish task");
-
-    println!("Task published, waiting for consumption...");
-
-    // Poll for messages with timeout
-    let result = timeout(Duration::from_secs(10), async {
-        loop {
-            match ctx.consumer.poll().await {
-                Ok(messages) => {
-                    if !messages.is_empty() {
-                        println!("Consumed {} message(s)", messages.len());
-                        return messages;
-                    }
+    async fn wait_for_completion(&self, job_id: &str, total: usize) -> JobSnapshot {
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(Some(snapshot)) = self.ledger.get(job_id)
+                    && snapshot.resource_completed >= total
+                {
+                    break snapshot;
                 }
-                Err(e) => {
-                    eprintln!("Poll error: {}", e);
-                }
+                sleep(Duration::from_millis(25)).await;
             }
-            sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await;
+        })
+        .await
+        .expect("timed out waiting for completion")
+    }
 
-    let messages = result.expect("Timeout waiting for messages");
-    assert!(!messages.is_empty(), "Should receive at least one message");
-
-    let received_task = &messages[0].payload;
-    assert_eq!(received_task.job_id, job_id);
-    assert_eq!(received_task.resource_id, "res-1");
-
-    println!("✓ Test passed: publish and consume");
+    async fn wait_for_dlq_entries(
+        &self,
+    ) -> Vec<(uuid::Uuid, fetchbox::proto::DeadLetterTask)> {
+        timeout(Duration::from_secs(20), async {
+            loop {
+                let entries = self.dlq.list(16).expect("list dlq entries");
+                if !entries.is_empty() {
+                    break entries;
+                }
+                sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("timed out waiting for dlq entries")
+    }
 }
 
-/// Test: End-to-end download workflow
-#[tokio::test]
-async fn test_e2e_download_workflow() {
-    let mut ctx = E2EContext::setup()
-        .await
-        .expect("Failed to setup test context");
-
-    // Create and publish task
-    let task = ctx.create_task("res-download-1", "sample.txt");
-    let job_id = task.job_id.clone();
-    let resource_id = task.resource_id.clone();
-
-    println!("Publishing task for job: {}", job_id);
-    ctx.producer
-        .publish_download_task(&task)
-        .await
-        .expect("Failed to publish task");
-
-    // Poll and process task
-    println!("Polling for task...");
-    let result = timeout(Duration::from_secs(10), async {
-        loop {
-            match ctx.consumer.poll().await {
-                Ok(messages) => {
-                    if !messages.is_empty() {
-                        return messages;
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Poll error: {}", e);
-                }
-            }
-            sleep(Duration::from_millis(100)).await;
+impl Drop for E2EHarness {
+    fn drop(&mut self) {
+        let _ = self.shutdown_tx.send(true);
+        for handle in &self.worker_handles {
+            handle.abort();
         }
+    }
+}
+
+fn sample_manifest(base_url: &str) -> serde_json::Value {
+    json!({
+        "manifest_version": "v1",
+        "storage": {
+            "manifest_file": "metadata.json",
+            "resource_key_prefix": "resources/test/"
+        },
+        "metadata": {},
+        "resources": [
+            {
+                "name": "resource1.txt",
+                "url": format!("{}/files/resource1.txt", base_url)
+            },
+            {
+                "name": "resource2.txt",
+                "url": format!("{}/files/resource2.txt", base_url)
+            }
+        ]
     })
-    .await;
+}
 
-    let messages = result.expect("Timeout waiting for messages");
-    let consumed_task = messages[0].payload.clone();
+fn failing_manifest(base_url: &str) -> serde_json::Value {
+    json!({
+        "manifest_version": "v1",
+        "storage": {
+            "manifest_file": "metadata.json",
+            "resource_key_prefix": "resources/test/"
+        },
+        "metadata": {},
+        "resources": [
+            {
+                "name": "resource_fail.txt",
+                "url": format!("{}/files/resource_fail.txt", base_url)
+            }
+        ]
+    })
+}
 
-    println!("Task consumed, processing download...");
+fn create_test_config() -> Config {
+    let config_toml = r#"
+[server]
+host = "127.0.0.1"
+port = 8080
+fjall_path = "/tmp/test.fjall"
 
-    // Process task using worker runner
-    runner::process_task(
-        consumed_task,
-        ctx.storage.clone(),
-        ctx.producer.clone(),
-        None, // No proxy
-    )
-    .await
-    .expect("Failed to process task");
+[storage]
+provider = "s3"
+bucket = "test-bucket"
+region = "us-east-1"
 
-    println!("Task processed, verifying storage...");
+[handlers.default]
+handler = "default"
+    "#;
 
-    // Verify file in storage
-    let expected_key = format!("resources/test/{}/{}", job_id, resource_id);
-    let stored_data = ctx
-        .storage
-        .download(&expected_key)
-        .await
-        .expect("Failed to download from storage");
+    toml::from_str(config_toml).expect("config")
+}
 
-    // Compare with original fixture
-    let original_data = include_bytes!("fixtures/sample.txt");
+struct MockHttpServer {
+    base_url: String,
+    handle: JoinHandle<()>,
+}
+
+impl MockHttpServer {
+    async fn start() -> Self {
+        let router = Router::new().route("/files/{name}", get(mock_file_handler));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let _ = axum::serve(listener, router.into_make_service()).await;
+        });
+
+        Self {
+            base_url: format!("http://{}", addr),
+            handle,
+        }
+    }
+}
+
+impl Drop for MockHttpServer {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+async fn mock_file_handler(
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> impl axum::response::IntoResponse {
+    if name.contains("fail") {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "boom");
+    }
+
+    (StatusCode::OK, "payload")
+}
+
+#[tokio::test]
+async fn job_failure_populates_dlq() {
+    let ctx = E2EHarness::new().await;
+    let manifest = failing_manifest(&ctx.http_server.base_url);
+    let response = ctx.submit_job(manifest).await;
+
+    let dlq_entries = ctx.wait_for_dlq_entries().await;
+    let (_, entry) = &dlq_entries[0];
+    assert_eq!(entry.failure_code, "DOWNLOAD_ERROR");
+    assert!(entry.attempts >= 1);
     assert_eq!(
-        stored_data.as_slice(),
-        original_data,
-        "Stored data should match original"
+        entry.task.as_ref().unwrap().resource_id,
+        "resource_fail.txt"
     );
 
-    println!("✓ Test passed: end-to-end download workflow");
-}
-
-/// Test: Download binary file
-#[tokio::test]
-async fn test_download_binary_file() {
-    let mut ctx = E2EContext::setup()
-        .await
-        .expect("Failed to setup test context");
-
-    let task = ctx.create_task("binary-res-1", "image.bin");
-    let job_id = task.job_id.clone();
-    let resource_id = task.resource_id.clone();
-
-    // Publish and consume
-    ctx.producer
-        .publish_download_task(&task)
-        .await
-        .expect("Failed to publish");
-
-    let result = timeout(Duration::from_secs(10), async {
-        loop {
-            match ctx.consumer.poll().await {
-                Ok(messages) if !messages.is_empty() => return messages,
-                _ => sleep(Duration::from_millis(100)).await,
-            }
-        }
-    })
-    .await
-    .expect("Timeout");
-
-    // Process
-    runner::process_task(result[0].payload.clone(), ctx.storage.clone(), ctx.producer.clone(), None)
-        .await
-        .expect("Failed to process");
-
-    // Verify binary data
-    let expected_key = format!("resources/test/{}/{}", job_id, resource_id);
-    let stored_data = ctx.storage.download(&expected_key).await.expect("Not found");
-
-    let original_data = include_bytes!("fixtures/image.bin");
-    assert_eq!(stored_data.as_slice(), original_data);
-
-    println!("✓ Test passed: binary file download");
-}
-
-/// Test: Multiple resources in parallel
-#[tokio::test]
-async fn test_multiple_resources() {
-    let mut ctx = E2EContext::setup()
-        .await
-        .expect("Failed to setup test context");
-
-    // Create 3 tasks
-    let tasks = vec![
-        ctx.create_task("multi-1", "sample.txt"),
-        ctx.create_task("multi-2", "image.bin"),
-        ctx.create_task("multi-3", "large.txt"),
-    ];
-
-    // Publish all tasks
-    for task in &tasks {
-        ctx.producer
-            .publish_download_task(task)
-            .await
-            .expect("Failed to publish");
-    }
-
-    println!("Published {} tasks", tasks.len());
-
-    // Consume and process all
-    let mut processed = 0;
-    let result = timeout(Duration::from_secs(15), async {
-        while processed < tasks.len() {
-            match ctx.consumer.poll().await {
-                Ok(messages) => {
-                    for msg in messages {
-                        println!("Processing task: {}", msg.payload.resource_id);
-                        runner::process_task(
-                            msg.payload,
-                            ctx.storage.clone(),
-                            ctx.producer.clone(),
-                            None,
-                        )
-                        .await
-                        .expect("Failed to process");
-                        processed += 1;
-                    }
-                }
-                Err(e) => eprintln!("Poll error: {}", e),
-            }
-            sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await;
-
-    assert!(result.is_ok(), "Should process all tasks within timeout");
-
-    println!("✓ Test passed: multiple resources");
-}
-
-/// Test: Custom HTTP headers
-#[tokio::test]
-async fn test_custom_headers() {
-    let mut ctx = E2EContext::setup()
-        .await
-        .expect("Failed to setup test context");
-
-    let mut task = ctx.create_task("headers-res-1", "sample.txt");
-    task.headers = vec![
-        HttpHeader {
-            name: "X-Custom-Header".to_string(),
-            value: "test-value".to_string(),
-        },
-        HttpHeader {
-            name: "User-Agent".to_string(),
-            value: "FetchBoxTest/1.0".to_string(),
-        },
-    ];
-
-    // Publish and consume
-    ctx.producer
-        .publish_download_task(&task)
-        .await
-        .expect("Failed to publish");
-
-    let result = timeout(Duration::from_secs(10), async {
-        loop {
-            match ctx.consumer.poll().await {
-                Ok(messages) if !messages.is_empty() => return messages,
-                _ => sleep(Duration::from_millis(100)).await,
-            }
-        }
-    })
-    .await
-    .expect("Timeout");
-
-    // Process
-    runner::process_task(result[0].payload.clone(), ctx.storage.clone(), ctx.producer.clone(), None)
-        .await
-        .expect("Failed to process");
-
-    // Just verify it completed (mock server doesn't validate headers)
-    let expected_key = format!("resources/test/{}/{}", task.job_id, task.resource_id);
-    ctx.storage
-        .download(&expected_key)
-        .await
-        .expect("Should be in storage");
-
-    println!("✓ Test passed: custom headers");
+    let snapshot = ctx.ledger.get(&response.job_id).unwrap().unwrap();
+    assert!(snapshot.resource_failed >= 1);
+    assert!(!snapshot.errors.is_empty());
 }

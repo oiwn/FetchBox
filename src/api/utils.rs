@@ -22,7 +22,8 @@ pub fn parse_content_type(content_type: &str) -> Result<mime::Mime, ApiError> {
         ApiError::InvalidPayload(format!("invalid Content-Type: {}", content_type))
     })?;
 
-    if media_type.type_() != mime::APPLICATION || media_type.subtype() != mime::JSON {
+    if media_type.type_() != mime::APPLICATION || media_type.subtype() != mime::JSON
+    {
         return Err(ApiError::InvalidPayload(format!(
             "Content-Type must be application/json, got: {}/{}",
             media_type.type_(),

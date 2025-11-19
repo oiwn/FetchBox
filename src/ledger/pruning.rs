@@ -1,11 +1,11 @@
 /// Pruning and retention policy implementation
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use fjall::{Keyspace, PartitionHandle};
-use tracing::{debug, info};
+use tracing::info;
 
 use super::error::Result;
-use super::partitions::{decode_job_key, decode_log_key, encode_meta_key};
+use super::partitions::encode_meta_key;
 
 /// Retention policy constants (days)
 /// NOTE: These will be moved to TOML config in Task 05
@@ -34,19 +34,17 @@ pub fn prune_expired(
     idem_partition: &PartitionHandle,
     metadata_partition: &PartitionHandle,
 ) -> Result<PruneStats> {
-    let mut stats = PruneStats::default();
-
-    // Prune jobs older than RETENTION_JOBS_DAYS
-    stats.jobs_pruned = prune_jobs(jobs_partition, metadata_partition)?;
-
-    // Prune logs older than RETENTION_LOGS_DAYS
-    stats.logs_pruned = prune_logs(logs_partition, metadata_partition)?;
-
-    // Prune idempotency keys older than RETENTION_IDEMPOTENCY_DAYS
-    stats.idempotency_pruned = prune_idempotency(idem_partition, metadata_partition)?;
+    let jobs_pruned = prune_jobs(jobs_partition, metadata_partition)?;
+    let logs_pruned = prune_logs(logs_partition, metadata_partition)?;
+    let idempotency_pruned = prune_idempotency(idem_partition, metadata_partition)?;
 
     // Trigger compaction to reclaim space
     keyspace.persist(fjall::PersistMode::SyncAll)?;
+    let stats = PruneStats {
+        jobs_pruned,
+        logs_pruned,
+        idempotency_pruned,
+    };
     info!("Pruning complete: {:?}", stats);
 
     Ok(stats)
@@ -54,16 +52,10 @@ pub fn prune_expired(
 
 /// Prune old job snapshots
 fn prune_jobs(
-    jobs_partition: &PartitionHandle,
+    _jobs_partition: &PartitionHandle,
     metadata_partition: &PartitionHandle,
 ) -> Result<usize> {
-    let cutoff_secs = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-        - (RETENTION_JOBS_DAYS * 86400);
-
-    let mut pruned = 0;
+    let pruned = 0;
 
     // For this initial implementation, we'll use a simple heuristic:
     // Check when the last prune happened. If it was > RETENTION_JOBS_DAYS ago,
@@ -90,10 +82,10 @@ fn prune_jobs(
 
 /// Prune old log entries
 fn prune_logs(
-    logs_partition: &PartitionHandle,
+    _logs_partition: &PartitionHandle,
     metadata_partition: &PartitionHandle,
 ) -> Result<usize> {
-    let mut pruned = 0;
+    let pruned = 0;
 
     // For this initial implementation, log pruning is deferred.
     // In production, you'd track log timestamps and remove entries
@@ -109,7 +101,10 @@ fn prune_logs(
         now.to_string().as_bytes(),
     )?;
 
-    info!("Pruned {} old log entries (timestamp-based pruning TBD)", pruned);
+    info!(
+        "Pruned {} old log entries (timestamp-based pruning TBD)",
+        pruned
+    );
     Ok(pruned)
 }
 
@@ -133,21 +128,22 @@ fn prune_idempotency(
 
     // Simple strategy: if last prune was > RETENTION_IDEMPOTENCY_DAYS ago,
     // clear all idempotency keys (acceptable since they're meant to be short-lived)
-    if let Some(last_prune_bytes) = metadata_partition.get(encode_meta_key(META_LAST_PRUNE_IDEM))? {
-        if let Ok(last_prune_str) = std::str::from_utf8(&last_prune_bytes) {
-            if let Ok(last_prune_secs) = last_prune_str.parse::<u64>() {
-                if last_prune_secs < cutoff_secs {
-                    // Clear all idempotency keys
-                    for item in idem_partition.iter() {
-                        let (key, _) = item?;
-                        idem_partition.remove(key)?;
-                        pruned += 1;
-                    }
-                }
-            }
+    let meta_key = encode_meta_key(META_LAST_PRUNE_IDEM);
+    let should_clear_all = match metadata_partition.get(meta_key.clone())? {
+        Some(last_prune_bytes)
+            if std::str::from_utf8(&last_prune_bytes)
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(|last_prune_secs| last_prune_secs < cutoff_secs)
+                .unwrap_or(false) =>
+        {
+            true
         }
-    } else {
-        // First prune, clear all
+        Some(_) => false,
+        None => true,
+    };
+
+    if should_clear_all {
         for item in idem_partition.iter() {
             let (key, _) = item?;
             idem_partition.remove(key)?;

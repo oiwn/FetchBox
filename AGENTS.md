@@ -1,21 +1,17 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
-- **Single binary, no workspaces**: The repository builds ONE CLI binary `fetchbox`; `src/main.rs` dispatches subcommands (`api`, `worker`, etc.) into modules under `src/`.
-- **Use modules, not separate crates**: All functionality lives inside the main crate's module tree (`src/api`, `src/handlers`, `src/proto`, `src/config`, etc.). Do NOT create workspace crates like `crates/fetchbox_xyz` unless explicitly required.
-- **Module structure examples**:
-  - `src/handlers/` - Handler trait system
-  - `src/proto/` - Generated protobuf types
-  - `src/api/` - API services
-  - `src/streams/` - Stream definitions
-- `specs/` contains task-by-task specifications; treat each `specs/task_XX.md` as the contract before coding.
-- `specs/current_task.md` points to current status; `specs/progress.md` tracks implementation history.
-- `docs/` mirrors polished specs (`docs/requirements.md`, `docs/messaging.md`, etc.) for operators.
-- `config/`, `docker-compose.dev.yml`, and `scripts/` host local environment assets when introduced.
+## Structure & Specs
+- The crate builds a single CLI binary; all functionality lives in the main module tree under `src/`. Architecture boundaries and module ownership are documented in `specs/overview.md`.
+- `specs/` is authoritative: each `specs/task_XX.md` is a contract, while `specs/ctx.md` captures the in-flight task context and must stay current with active work.
+- Add a checkbox-based TODO section to `specs/ctx.md` to track current task progress explicitly.
+- `config/` houses example configuration files. Avoid scattering environment assets elsewhere unless the plan explicitly calls for it.
 
-## Current task
-
-`specs/ctx.md` contains current task and it context. Keep it simple and updated to current state of things. Relevant information also should be stored there.
+## Release preparation requirements
+- Keep documentation aligned with release expectations: refresh `AGENTS.md`, `README.md`, and `specs/overview.md` whenever the plan in `specs/ctx.md` changes.
+- Resolve every `cargo clippy --all-targets -- -D warnings` finding, then rerun to prove a clean lint pass before merging or tagging a release.
+- Clean up the specifications directory: remove deprecated specs, ensure surviving docs match the planned features, and avoid stale cross-references.
+- Capture release steps (install, examples, contribution workflow) in `README.md` so GitHub visitors can reproduce the setup without tribal knowledge.
+- Perform a secrets sweep prior to publishing: search for API keys, tokens, or credentials and verify `.gitignore`/`.env.example` are sufficient to prevent leaks.
 
 ## Build, Test, and Development Commands
 - `cargo check` — fast validation of the entire crate; run before opening a PR.
@@ -23,7 +19,6 @@
 - `cargo clippy --all-targets -- -D warnings` — lint with Clippy; fail on warnings.
 - `cargo test --all` — execute unit tests; integration tests will live under `tests/`.
 - `cargo add <crate_name>` — **ALWAYS use this to add dependencies**. It automatically fetches the latest compatible version instead of manually editing `Cargo.toml`.
-- `make dev-up` / `make dev-down` (once added) — spin up/down Iggy + MinIO via Docker Compose for end-to-end testing.
 
 ## Coding Style & Naming Conventions
 - Rust edition 2024, enforced via `rustfmt.toml`; prefer 4-space indentation and trailing commas in multi-line structures.
@@ -43,15 +38,6 @@
 - When creating plans, structure them as: Prerequisites -> Steps -> Deliverables -> Decision Points.
 - Keep plans actionable and focused on technical approach, not duration.
 
-## Commit & Pull Request Guidelines
-- Commit messages: short imperative subject (`Add handler registry`) plus optional body explaining reasoning.
-- Reference related spec or issue (`Refs #task-02`) when applicable.
-- PR checklist:
-  1. Link the relevant spec (`specs/task_XX_*.md`) and summarize how acceptance criteria are met.
-  2. Include testing evidence (`cargo test`, integration logs).
-  3. Attach screenshots or logs for operator surfaces if UI/CLI output changed.
-  4. Keep PRs focused on a single backlog item to ease review.
-
 ## Security & Configuration Tips
 - Never commit real credentials; rely on `.env.example` templates.
-- Validate config changes against `fetchbox_config` schema and document configuration as file-level comment..
+- Validate config changes against `fetchbox_config` schema and document configuration as file-level comment.

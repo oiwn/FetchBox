@@ -1,0 +1,53 @@
+# FetchBox config tuned for the httpbin + MinIO example.
+#
+# The example renders this template into a temp directory, replacing
+# __LEDGER_DIR__ and __QUEUE_DIR__ with actual paths before pointing
+# FETCHBOX_CONFIG at the rendered file. To run manually outside the
+# example, copy this file, fill in concrete paths, and ensure the
+# S3 credentials environment variables are exported.
+
+[server]
+bind_addr = "127.0.0.1:8081"
+fjall_path = "__LEDGER_DIR__"
+
+[server.api]
+max_payload_bytes = "1MB"
+max_resources_per_manifest = 32
+
+[queue]
+path = "__QUEUE_DIR__"
+workers = 3
+channel_size = 16
+
+[queue.worker]
+rate_limit_per_worker = 8
+max_retries = 1
+retry_backoff_ms = 200
+task_timeout_ms = 3000
+
+[storage]
+provider = "s3"
+bucket = "fetchbox-httpbin"
+region = "us-east-1"
+endpoint = "http://127.0.0.1:9000"
+
+# The example rewrites manifest.storage.* at runtime so manifests and
+# resources land together under s3://fetchbox-httpbin/YYYY/MM/DD/httpbin_minio/.
+
+[handlers.default]
+handler = "fetchbox::handlers::DefaultHandler"
+proxy_pool = "direct"
+
+[proxy.pools.direct]
+primary = []
+fallbacks = []
+retry_backoff_ms = 0
+max_retries = 0
+
+[retention]
+job_ttl_days = 1
+ledger_max_bytes = "1GB"
+logs_ttl_days = 1
+
+[telemetry]
+metrics_addr = "127.0.0.1:9092"

@@ -1,0 +1,53 @@
+{
+  "manifest_version": "v1",
+  "storage": {
+    "manifest_file": "httpbin.json",
+    "resource_key_prefix": "examples/httpbin/"
+  },
+  "metadata": {
+    "description": "Demonstrates three different responses from httpbin.org"
+  },
+  "resources": [
+    {
+      "name": "anything.json",
+      "url": "https://httpbin.org/anything",
+      "headers": {
+        "Accept": "application/json",
+        "X-Demo-Scenario": "anything"
+      },
+      "tags": {
+        "purpose": "demo",
+        "httpbin_endpoint": "/anything"
+      }
+    },
+    {
+      "name": "uuid.json",
+      "url": "https://httpbin.org/uuid",
+      "headers": {
+        "Accept": "application/json",
+        "X-Demo-Scenario": "uuid"
+      },
+      "tags": {
+        "purpose": "demo",
+        "httpbin_endpoint": "/uuid"
+      }
+    },
+    {
+      "name": "delayed.json",
+      "url": "https://httpbin.org/delay/2",
+      "headers": {
+        "Accept": "application/json",
+        "X-Demo-Scenario": "delay"
+      },
+      "tags": {
+        "purpose": "demo",
+        "httpbin_endpoint": "/delay/2"
+      }
+    }
+  ],
+  "attributes": {
+    "tenant": "example",
+    "job_label": "httpbin-demo",
+    "submitted_by": "examples/httpbin.rs"
+  }
+}

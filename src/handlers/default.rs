@@ -1,8 +1,9 @@
 use async_trait::async_trait;
+use serde_json::Value;
 
-use super::r#trait::{HandlerError, JobHandler};
 use super::registry::HandlerConfig;
-use super::types::{DownloadTask, JobSummary, ManifestContext, PreparedManifest};
+use super::traits::{HandlerError, JobHandler};
+use super::types::{DownloadTask, JobSummary, ManifestEnvelope, PreparedManifest};
 
 /// Default handler implementation (spec task_02.md §3)
 ///
@@ -23,19 +24,19 @@ impl DefaultHandler {
 impl JobHandler for DefaultHandler {
     async fn prepare_manifest(
         &self,
-        ctx: ManifestContext,
+        envelope: ManifestEnvelope,
     ) -> Result<PreparedManifest, HandlerError> {
         // Validate manifest version
-        if ctx.manifest.manifest_version != "v1" {
+        if envelope.manifest.manifest_version != "v1" {
             return Err(HandlerError::InvalidManifest(format!(
                 "unsupported manifest version: {}",
-                ctx.manifest.manifest_version
+                envelope.manifest.manifest_version
             )));
         }
 
         Ok(PreparedManifest {
-            context: ctx,
-            handler_data: None,
+            envelope,
+            handler_context: Value::Null,
         })
     }
 
@@ -43,11 +44,11 @@ impl JobHandler for DefaultHandler {
         &self,
         prepared: PreparedManifest,
     ) -> Result<Vec<DownloadTask>, HandlerError> {
-        let ctx = prepared.context;
-        let job_id = &ctx.job_id;
+        let envelope = prepared.envelope;
+        let job_id = envelope.job_id;
+        let manifest = envelope.manifest;
 
-        let tasks = ctx
-            .manifest
+        let tasks = manifest
             .resources
             .iter()
             .map(|resource| {
@@ -55,7 +56,7 @@ impl JobHandler for DefaultHandler {
                     .config
                     .storage
                     .as_ref()
-                    .map(|s| s.to_hint(job_id, &resource.name));
+                    .map(|s| s.to_hint(job_id.as_str(), &resource.name));
 
                 let proxy_hint = self.config.proxy.as_ref().map(|p| p.to_hint());
 
@@ -80,13 +81,18 @@ impl JobHandler for DefaultHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::models::{Manifest, Resource};
-    use crate::handlers::types::HeadersMap;
+    use crate::api::models::{Manifest, Resource, StorageConfig};
+    use crate::handlers::types::{HeadersMap, ManifestEnvelope};
+    use chrono::Utc;
     use serde_json::{Map, Value};
 
     fn sample_manifest() -> Manifest {
         Manifest {
             manifest_version: "v1".to_string(),
+            storage: StorageConfig {
+                manifest_file: "manifest.json".to_string(),
+                resource_key_prefix: "resources/test/".to_string(),
+            },
             metadata: Value::Object(Map::new()),
             resources: vec![Resource {
                 name: "resource-1".to_string(),
@@ -109,18 +115,21 @@ mod tests {
         };
 
         let handler = DefaultHandler::new(config);
-        let ctx = ManifestContext {
+        let ctx = ManifestEnvelope {
             job_id: "test-job".to_string(),
             job_type: "default".to_string(),
+            tenant: "tenant-a".to_string(),
             manifest: sample_manifest(),
+            manifest_location: None,
+            received_at: Utc::now(),
         };
 
         let result = handler.prepare_manifest(ctx).await;
         assert!(result.is_ok());
 
         let prepared = result.unwrap();
-        assert_eq!(prepared.context.job_id, "test-job");
-        assert_eq!(prepared.context.manifest.resources.len(), 1);
+        assert_eq!(prepared.envelope.job_id, "test-job");
+        assert_eq!(prepared.envelope.manifest.resources.len(), 1);
     }
 
     #[tokio::test]
@@ -134,10 +143,13 @@ mod tests {
         };
 
         let handler = DefaultHandler::new(config);
-        let ctx = ManifestContext {
+        let ctx = ManifestEnvelope {
             job_id: "test-job".to_string(),
             job_type: "default".to_string(),
+            tenant: "tenant-a".to_string(),
             manifest: sample_manifest(),
+            manifest_location: None,
+            received_at: Utc::now(),
         };
 
         let prepared = handler.prepare_manifest(ctx).await.unwrap();
@@ -162,14 +174,20 @@ mod tests {
         let mut manifest = sample_manifest();
         manifest.manifest_version = "v2".to_string();
 
-        let ctx = ManifestContext {
+        let ctx = ManifestEnvelope {
             job_id: "test-job".to_string(),
             job_type: "default".to_string(),
+            tenant: "tenant-a".to_string(),
             manifest,
+            manifest_location: None,
+            received_at: Utc::now(),
         };
 
         let result = handler.prepare_manifest(ctx).await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), HandlerError::InvalidManifest(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            HandlerError::InvalidManifest(_)
+        ));
     }
 }

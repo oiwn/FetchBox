@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
-use super::types::{DownloadTask, JobSummary, ManifestContext, PreparedManifest};
+use super::types::{DownloadTask, JobSummary, ManifestEnvelope, PreparedManifest};
 
 /// Handler errors (spec §2)
 #[derive(Debug, Error)]
@@ -25,7 +25,7 @@ pub trait JobHandler: Send + Sync {
     /// Prepare/validate the manifest before task generation
     async fn prepare_manifest(
         &self,
-        ctx: ManifestContext,
+        envelope: ManifestEnvelope,
     ) -> Result<PreparedManifest, HandlerError>;
 
     /// Build download tasks from the prepared manifest

@@ -29,7 +29,9 @@ pub enum ManifestValidationError {
     InvalidAttributes,
 }
 
-pub fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestValidationError> {
+pub fn validate_manifest(
+    manifest: &Manifest,
+) -> Result<(), ManifestValidationError> {
     if manifest.manifest_version != "v1" {
         return Err(ManifestValidationError::UnsupportedVersion);
     }
@@ -42,10 +44,10 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestValidationEr
         return Err(ManifestValidationError::InvalidResourceCount);
     }
 
-    if let Some(attributes) = &manifest.attributes {
-        if !attributes.is_object() {
-            return Err(ManifestValidationError::InvalidAttributes);
-        }
+    if let Some(attributes) = &manifest.attributes
+        && !attributes.is_object()
+    {
+        return Err(ManifestValidationError::InvalidAttributes);
     }
 
     let mut seen = HashSet::new();
@@ -60,7 +62,9 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestValidationEr
             return Err(ManifestValidationError::DuplicateResourceNames);
         }
 
-        if !resource.url.starts_with("http://") && !resource.url.starts_with("https://") {
+        if !resource.url.starts_with("http://")
+            && !resource.url.starts_with("https://")
+        {
             return Err(ManifestValidationError::InvalidResourceUrl(
                 resource.name.clone(),
             ));
@@ -110,7 +114,7 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestValidationEr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::models::Resource;
+    use crate::api::models::{Manifest, Resource, StorageConfig};
     use crate::handlers::types::HeadersMap;
     use serde_json::{Map, Value};
 
@@ -141,6 +145,10 @@ mod tests {
     fn sample_manifest() -> Manifest {
         Manifest {
             manifest_version: "v1".to_string(),
+            storage: StorageConfig {
+                manifest_file: "manifest.json".to_string(),
+                resource_key_prefix: "resources/test/".to_string(),
+            },
             metadata: Value::Object(Map::new()),
             resources: vec![Resource {
                 name: "resource-1".to_string(),

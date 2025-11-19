@@ -31,7 +31,7 @@ pub fn load() -> Result<Config, ConfigError> {
 
 /// Load secrets from environment variables into config
 /// Secrets are never stored in TOML files, only in environment
-fn load_secrets(config: &mut Config) {
+pub(super) fn load_secrets(config: &mut Config) {
     // Load S3 credentials
     if let Ok(access_key) = env::var("S3_ACCESS_KEY") {
         config.storage.access_key = Some(access_key);
@@ -41,15 +41,15 @@ fn load_secrets(config: &mut Config) {
     }
 
     // Alternative: AWS-style environment variable names
-    if config.storage.access_key.is_none() {
-        if let Ok(access_key) = env::var("AWS_ACCESS_KEY_ID") {
-            config.storage.access_key = Some(access_key);
-        }
+    if config.storage.access_key.is_none()
+        && let Ok(access_key) = env::var("AWS_ACCESS_KEY_ID")
+    {
+        config.storage.access_key = Some(access_key);
     }
-    if config.storage.secret_key.is_none() {
-        if let Ok(secret_key) = env::var("AWS_SECRET_ACCESS_KEY") {
-            config.storage.secret_key = Some(secret_key);
-        }
+    if config.storage.secret_key.is_none()
+        && let Ok(secret_key) = env::var("AWS_SECRET_ACCESS_KEY")
+    {
+        config.storage.secret_key = Some(secret_key);
     }
 }
 
@@ -105,18 +105,19 @@ mod tests {
         let toml_content = r#"
 [server]
 bind_addr = "127.0.0.1:9000"
-max_manifest_bytes = "10MB"
 
-[iggy]
-endpoint = "iggy://test-server:8090"
-client_id = "test-client"
+[server.api]
+max_payload_bytes = "5MB"
         "#;
 
         fs::write(&config_path, toml_content).unwrap();
 
         let config = load_from_sources(config_path).unwrap();
         assert_eq!(config.server.bind_addr.to_string(), "127.0.0.1:9000");
-        assert_eq!(config.server.api.max_payload_bytes.as_u64(), 10 * 1024 * 1024);
+        assert_eq!(
+            config.server.api.max_payload_bytes.as_u64(),
+            5 * 1024 * 1024
+        );
     }
 
     // Note: test_env_overrides removed due to unsafe env::set_var usage
@@ -130,8 +131,10 @@ client_id = "test-client"
         let toml_content = r#"
 [server]
 bind_addr = "0.0.0.0:8080"
-max_manifest_bytes = "5MB"
 fjall_path = "data/ledger"
+
+[server.api]
+max_payload_bytes = "5MB"
 
 [iggy]
 endpoint = "iggy://localhost:8090"
@@ -176,7 +179,10 @@ metrics_addr = "0.0.0.0:9090"
 
         // Verify server config
         assert_eq!(config.server.bind_addr.to_string(), "0.0.0.0:8080");
-        assert_eq!(config.server.api.max_payload_bytes.as_u64(), 5 * 1024 * 1024);
+        assert_eq!(
+            config.server.api.max_payload_bytes.as_u64(),
+            5 * 1024 * 1024
+        );
 
         // Verify handlers
         assert_eq!(config.handlers.len(), 2);
@@ -184,7 +190,7 @@ metrics_addr = "0.0.0.0:9090"
         assert!(config.handlers.contains_key("gallery"));
 
         let default_handler = &config.handlers["default"];
-        assert_eq!(default_handler.proxy_pool, "default");
+        assert_eq!(default_handler.proxy_pool.as_deref(), Some("default"));
 
         // Verify proxy pools
         assert_eq!(config.proxy.pools.len(), 2);

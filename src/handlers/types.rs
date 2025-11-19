@@ -1,25 +1,37 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
 use crate::api::models::{Manifest, Resource};
 
+pub type JobId = String;
+pub type TenantId = String;
+#[allow(dead_code)]
+pub type TaskId = String;
+pub type ManifestBlob = Value;
+#[allow(dead_code)]
+pub type HandlerMetadata = BTreeMap<String, String>;
+pub type ManifestLocation = String;
 pub type HeadersMap = BTreeMap<String, String>;
 
-/// Context passed to handlers during manifest preparation (spec §2)
+/// Envelope describing a manifest submission (spec §2)
 #[derive(Debug, Clone)]
-pub struct ManifestContext {
-    pub job_id: String,
+pub struct ManifestEnvelope {
+    pub job_id: JobId,
     pub job_type: String,
+    pub tenant: TenantId,
     pub manifest: Manifest,
+    pub manifest_location: Option<ManifestLocation>,
+    pub received_at: DateTime<Utc>,
 }
 
 /// Handler-prepared manifest context (spec §2)
 #[derive(Debug, Clone)]
 pub struct PreparedManifest {
-    pub context: ManifestContext,
-    /// Handler can store additional preparation state here
-    pub handler_data: Option<Value>,
+    pub envelope: ManifestEnvelope,
+    /// Handler-specific derived state (spec allows arbitrary JSON)
+    pub handler_context: ManifestBlob,
 }
 
 /// Individual download task emitted by handlers (spec §2)
@@ -54,7 +66,7 @@ pub struct ProxyHint {
 /// Job completion summary for finalization (spec §2)
 #[derive(Debug, Clone)]
 pub struct JobSummary {
-    pub job_id: String,
+    pub job_id: JobId,
     pub job_type: String,
     pub total_resources: usize,
     pub completed_resources: usize,
@@ -64,10 +76,10 @@ pub struct JobSummary {
 /// Task context containing job-level metadata for proto conversion
 #[derive(Debug, Clone)]
 pub struct TaskContext {
-    pub job_id: String,
+    pub job_id: JobId,
     pub job_type: String,
-    pub tenant: String,
-    pub manifest_key: String,
+    pub tenant: TenantId,
+    pub manifest_key: ManifestLocation,
 }
 
 impl DownloadTask {
@@ -140,7 +152,11 @@ impl From<StorageHint> for crate::proto::StorageHint {
         Self {
             bucket: hint.bucket,
             key_prefix: hint.key_prefix,
-            metadata: hint.object_metadata.unwrap_or_default().into_iter().collect(),
+            metadata: hint
+                .object_metadata
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
         }
     }
 }
@@ -187,7 +203,9 @@ mod tests {
         let hint = StorageHint {
             bucket: "test-bucket".to_string(),
             key_prefix: "prefix/".to_string(),
-            object_metadata: Some([("content-type".to_string(), "image/jpeg".to_string())].into()),
+            object_metadata: Some(
+                [("content-type".to_string(), "image/jpeg".to_string())].into(),
+            ),
         };
 
         let proto: crate::proto::StorageHint = hint.clone().into();
@@ -269,7 +287,12 @@ mod tests {
             fallback_pools: vec![],
         });
 
-        let task = DownloadTask::from_resource(&resource, &default_headers, storage, proxy);
+        let task = DownloadTask::from_resource(
+            &resource,
+            &default_headers,
+            storage,
+            proxy,
+        );
 
         assert_eq!(task.resource_name, "resource-1.jpg");
         assert_eq!(task.url, "https://example.com/file.jpg");

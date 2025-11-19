@@ -32,7 +32,6 @@ lcov.info
 
 # Environment variables (secrets)
 .env
-specs/
 tmp/
 
 # FetchBox data directories

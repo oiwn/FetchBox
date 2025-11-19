@@ -12,8 +12,8 @@ use fetchbox::api::models::{JobAcceptedResponse, JobSnapshot};
 use fetchbox::api::state::AppState;
 use fetchbox::config::Config;
 use fetchbox::handlers::HandlerRegistry;
-use fetchbox::ledger::FjallStore;
-use fetchbox::queue::{FjallQueue, TaskBroker};
+use fetchbox::ledger::LedgerStorage;
+use fetchbox::queue::{DlqStorage, TaskBroker, TasksStorage};
 use fetchbox::storage::StorageClient;
 use tokio::sync::RwLock;
 
@@ -46,21 +46,24 @@ async fn build_test_app() -> (Router, TempDir) {
     // Create temporary directory for Fjall stores
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let store_path = temp_dir.path().join("test.fjall");
-    let queue_path = temp_dir.path().join("queue.fjall");
+    let tasks_path = temp_dir.path().join("queue.fjall");
+    let dlq_path = temp_dir.path().join("dlq.fjall");
 
     // Open Fjall store in temp location
-    let store = FjallStore::open(store_path.to_str().unwrap())
+    let store = LedgerStorage::open(store_path.to_str().unwrap())
         .expect("Failed to open test Fjall store");
 
     // Use in-memory storage (no real S3)
     let storage = StorageClient::in_memory();
 
     // Initialize queue and broker (new architecture)
-    let queue = Arc::new(RwLock::new(
-        FjallQueue::open(&queue_path).expect("Failed to open test queue"),
+    let tasks = Arc::new(RwLock::new(
+        TasksStorage::open(&tasks_path).expect("Failed to open test queue"),
     ));
+    let dlq =
+        Arc::new(DlqStorage::open(&dlq_path).expect("Failed to open test DLQ"));
 
-    let (broker, _worker_receivers) = TaskBroker::new(queue, 4, 100);
+    let (broker, _worker_receivers) = TaskBroker::new(tasks, dlq, 4, 100);
     let broker = Arc::new(broker);
 
     // Create minimal test config (bypassing file-based config)
@@ -181,7 +184,9 @@ async fn test_ingest_job_idempotency() {
         .body(Body::from(serde_json::to_string(&manifest).unwrap()))
         .unwrap();
 
-    let response1 = ServiceExt::<Request<Body>>::oneshot(app.clone(), request1).await.unwrap();
+    let response1 = ServiceExt::<Request<Body>>::oneshot(app.clone(), request1)
+        .await
+        .unwrap();
     assert_eq!(response1.status(), StatusCode::ACCEPTED);
 
     let body1 = axum::body::to_bytes(response1.into_body(), usize::MAX)
@@ -199,7 +204,9 @@ async fn test_ingest_job_idempotency() {
         .body(Body::from(serde_json::to_string(&manifest).unwrap()))
         .unwrap();
 
-    let response2 = ServiceExt::<Request<Body>>::oneshot(app, request2).await.unwrap();
+    let response2 = ServiceExt::<Request<Body>>::oneshot(app, request2)
+        .await
+        .unwrap();
     assert_eq!(response2.status(), StatusCode::ACCEPTED);
 
     let body2 = axum::body::to_bytes(response2.into_body(), usize::MAX)
@@ -283,7 +290,10 @@ async fn test_get_job_success() {
 
     // First, ingest a job
     let ingest_request = post_job_request(valid_manifest());
-    let ingest_response = ServiceExt::<Request<Body>>::oneshot(app.clone(), ingest_request).await.unwrap();
+    let ingest_response =
+        ServiceExt::<Request<Body>>::oneshot(app.clone(), ingest_request)
+            .await
+            .unwrap();
     let ingest_body = axum::body::to_bytes(ingest_response.into_body(), usize::MAX)
         .await
         .unwrap();
@@ -296,7 +306,9 @@ async fn test_get_job_success() {
         .body(Body::empty())
         .unwrap();
 
-    let get_response = ServiceExt::<Request<Body>>::oneshot(app, get_request).await.unwrap();
+    let get_response = ServiceExt::<Request<Body>>::oneshot(app, get_request)
+        .await
+        .unwrap();
 
     assert_eq!(get_response.status(), StatusCode::OK);
 
@@ -348,7 +360,10 @@ async fn test_health_endpoint() {
     let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     // Verify structure matches spec (status, components HashMap, version)
-    assert_eq!(health.get("status").and_then(|v| v.as_str()), Some("healthy"));
+    assert_eq!(
+        health.get("status").and_then(|v| v.as_str()),
+        Some("healthy")
+    );
     assert!(health.get("components").is_some());
     assert!(health.get("components").unwrap().is_object());
     assert!(health.get("version").is_some());

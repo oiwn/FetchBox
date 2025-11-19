@@ -10,6 +10,8 @@ pub struct Config {
     #[serde(default)]
     pub server: ServerConfig,
     #[serde(default)]
+    pub queue: QueueConfig,
+    #[serde(default)]
     pub storage: StorageConfig,
     #[serde(default)]
     pub handlers: HashMap<String, HandlerConfig>,
@@ -33,10 +35,86 @@ pub struct ServerConfig {
     pub api: ApiLimits,
 }
 
+/// Queue/worker runtime configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct QueueConfig {
+    #[serde(default = "default_queue_path")]
+    pub path: PathBuf,
+    #[serde(default = "default_worker_count")]
+    pub workers: usize,
+    #[serde(default = "default_worker_channel_size")]
+    pub channel_size: usize,
+    #[serde(default)]
+    pub worker: WorkerRuntimeConfig,
+}
+
+impl Default for QueueConfig {
+    fn default() -> Self {
+        Self {
+            path: default_queue_path(),
+            workers: default_worker_count(),
+            channel_size: default_worker_channel_size(),
+            worker: WorkerRuntimeConfig::default(),
+        }
+    }
+}
+
+fn default_queue_path() -> PathBuf {
+    PathBuf::from("data/queue")
+}
+
+fn default_worker_count() -> usize {
+    4
+}
+
+fn default_worker_channel_size() -> usize {
+    128
+}
+
+/// Worker runtime tuning knobs
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WorkerRuntimeConfig {
+    #[serde(default = "default_worker_rate_limit")]
+    pub rate_limit_per_worker: u64,
+    #[serde(default = "default_worker_max_retries")]
+    pub max_retries: u32,
+    #[serde(default = "default_worker_retry_backoff_ms")]
+    pub retry_backoff_ms: u64,
+    #[serde(default = "default_worker_task_timeout_ms")]
+    pub task_timeout_ms: u64,
+}
+
+impl Default for WorkerRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            rate_limit_per_worker: default_worker_rate_limit(),
+            max_retries: default_worker_max_retries(),
+            retry_backoff_ms: default_worker_retry_backoff_ms(),
+            task_timeout_ms: default_worker_task_timeout_ms(),
+        }
+    }
+}
+
+fn default_worker_rate_limit() -> u64 {
+    16
+}
+
+fn default_worker_max_retries() -> u32 {
+    3
+}
+
+fn default_worker_retry_backoff_ms() -> u64 {
+    500
+}
+
+fn default_worker_task_timeout_ms() -> u64 {
+    60_000
+}
+
 /// API request limits (spec §1.4)
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ApiLimits {
-    #[serde(default = "default_max_payload_bytes")]
+    #[serde(default = "default_max_payload_bytes", alias = "max_manifest_bytes")]
     pub max_payload_bytes: ByteSize,
     #[serde(default = "default_max_resources_per_manifest")]
     pub max_resources_per_manifest: usize,
@@ -92,10 +170,11 @@ fn default_fjall_path() -> PathBuf {
 }
 
 /// Storage provider type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum StorageProvider {
     S3,
+    #[default]
     Local,
 }
 
@@ -126,12 +205,6 @@ impl Default for StorageConfig {
             secret_key: None,
             region: None,
         }
-    }
-}
-
-impl Default for StorageProvider {
-    fn default() -> Self {
-        StorageProvider::Local
     }
 }
 
@@ -264,6 +337,7 @@ mod tests {
     fn test_default_config() {
         let config = Config {
             server: ServerConfig::default(),
+            queue: QueueConfig::default(),
             storage: StorageConfig::default(),
             handlers: HashMap::new(),
             proxy: ProxyConfig::default(),
@@ -272,7 +346,10 @@ mod tests {
         };
 
         assert_eq!(config.server.bind_addr.to_string(), "0.0.0.0:8080");
-        assert_eq!(config.server.api.max_payload_bytes.as_u64(), 5 * 1024 * 1024);
+        assert_eq!(
+            config.server.api.max_payload_bytes.as_u64(),
+            5 * 1024 * 1024
+        );
         assert_eq!(config.server.api.max_resources_per_manifest, 1000);
     }
 }

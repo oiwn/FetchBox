@@ -1,4 +1,6 @@
-use super::models::{ProxyConfig, ProxyEndpoint, ProxyPoolConfig, ResolvedProxyPool};
+use super::models::{
+    ProxyConfig, ProxyEndpoint, ProxyPoolConfig, ResolvedProxyPool,
+};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
@@ -27,7 +29,10 @@ impl<'a> ProxyGraph<'a> {
     /// Resolve a proxy pool into tiered fallback structure
     /// Tier 0 = primary proxies
     /// Tier 1+ = fallback tiers in order
-    pub fn resolve(&self, pool_name: &str) -> Result<ResolvedProxyPool, ResolverError> {
+    pub fn resolve(
+        &self,
+        pool_name: &str,
+    ) -> Result<ResolvedProxyPool, ResolverError> {
         let mut visited = HashSet::new();
         let mut tiers = Vec::new();
 
@@ -76,7 +81,9 @@ impl<'a> ProxyGraph<'a> {
     }
 
     /// Resolve all pools and return a cached map
-    pub fn resolve_all(&self) -> Result<HashMap<String, ResolvedProxyPool>, ResolverError> {
+    pub fn resolve_all(
+        &self,
+    ) -> Result<HashMap<String, ResolvedProxyPool>, ResolverError> {
         let mut resolved = HashMap::new();
 
         for pool_name in self.pools.keys() {

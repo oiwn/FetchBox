@@ -49,6 +49,15 @@ pub struct HttpClient {
     config: HttpConfig,
 }
 
+impl Clone for HttpClient {
+    fn clone(&self) -> Self {
+        Self {
+            client: self.client.clone(),
+            config: self.config.clone(),
+        }
+    }
+}
+
 impl HttpClient {
     /// Create a new HTTP client
     pub fn new(config: HttpConfig, proxy_url: Option<&str>) -> Result<Self> {
@@ -60,8 +69,9 @@ impl HttpClient {
 
         // Configure proxy if provided
         if let Some(url) = proxy_url {
-            let proxy = Proxy::all(url)
-                .map_err(|e| DownloadError::InvalidUrl(format!("Invalid proxy: {}", e)))?;
+            let proxy = Proxy::all(url).map_err(|e| {
+                DownloadError::InvalidUrl(format!("Invalid proxy: {}", e))
+            })?;
             builder = builder.proxy(proxy);
         }
 
@@ -79,7 +89,6 @@ impl HttpClient {
         headers: Vec<(String, String)>,
     ) -> Result<Bytes> {
         let mut attempts = 0;
-        let mut last_error = String::new();
 
         loop {
             attempts += 1;
@@ -92,17 +101,17 @@ impl HttpClient {
                     return Ok(bytes);
                 }
                 Err(e) => {
-                    last_error = e.to_string();
+                    let error_message = e.to_string();
 
                     if attempts >= self.config.max_retries {
-                        warn!(url, attempts, error = %last_error, "Download failed after retries");
+                        warn!(url, attempts, error = %error_message, "Download failed after retries");
                         return Err(DownloadError::RequestFailed(format!(
                             "Failed after {} attempts: {}",
-                            attempts, last_error
+                            attempts, error_message
                         )));
                     }
 
-                    warn!(url, attempts, error = %last_error, "Download failed, retrying");
+                    warn!(url, attempts, error = %error_message, "Download failed, retrying");
 
                     // Exponential backoff: 1s, 2s, 4s
                     let backoff = Duration::from_secs(2u64.pow(attempts - 1));
@@ -127,18 +136,15 @@ impl HttpClient {
             request = request.header(name, value);
         }
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    DownloadError::Timeout
-                } else if e.is_redirect() {
-                    DownloadError::TooManyRedirects
-                } else {
-                    DownloadError::RequestFailed(e.to_string())
-                }
-            })?;
+        let response = request.send().await.map_err(|e| {
+            if e.is_timeout() {
+                DownloadError::Timeout
+            } else if e.is_redirect() {
+                DownloadError::TooManyRedirects
+            } else {
+                DownloadError::RequestFailed(e.to_string())
+            }
+        })?;
 
         // Check HTTP status
         let status = response.status();
@@ -151,10 +157,9 @@ impl HttpClient {
         }
 
         // Read response body
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| DownloadError::RequestFailed(format!("Failed to read body: {}", e)))?;
+        let bytes = response.bytes().await.map_err(|e| {
+            DownloadError::RequestFailed(format!("Failed to read body: {}", e))
+        })?;
 
         debug!(url, size = bytes.len(), "Download completed");
 

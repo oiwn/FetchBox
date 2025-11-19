@@ -1,3 +1,6 @@
+pub mod error;
+pub mod partitions;
+pub mod pruning;
 /// Fjall-based persistence layer for job snapshots, logs, and metadata
 ///
 /// This module provides durable storage for FetchBox's job state, replacing
@@ -32,14 +35,14 @@
 /// store.upsert(job_snapshot)?;
 /// let snapshot = store.get("job_123")?;
 /// ```
-
-pub mod error;
-pub mod partitions;
-pub mod pruning;
-pub mod store;
+pub mod storage;
 
 pub use error::{LedgerError, Result};
 pub use pruning::{
-    PruneStats, RETENTION_IDEMPOTENCY_DAYS, RETENTION_JOBS_DAYS, RETENTION_LOGS_DAYS,
+    PruneStats, RETENTION_IDEMPOTENCY_DAYS, RETENTION_JOBS_DAYS,
+    RETENTION_LOGS_DAYS,
 };
-pub use store::{FjallStore, StoreStats};
+pub use storage::{LedgerStorage, StoreStats};
+
+/// Backward compatibility alias (cleanup once callers migrate to LedgerStorage)
+pub type FjallStore = LedgerStorage;

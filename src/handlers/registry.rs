@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use thiserror::Error;
 
-use super::r#trait::JobHandler;
+use super::traits::JobHandler;
 use super::types::{HeadersMap, ProxyHint, StorageHint};
 
 /// Handler configuration from TOML (spec task_01.md §3)

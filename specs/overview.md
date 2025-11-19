@@ -8,12 +8,20 @@ This document indexes all specifications and provides a complete guide to FetchB
 
 ### Key Features
 
-- **Single-process architecture** - API + Workers in same binary
-- **No external dependencies** - Self-contained with embedded databases
-- **Tower-based workers** - Automatic retries, rate limiting
-- **Three Fjall databases** - Separate queue, ledger, and DLQ
-- **Extensible handlers** - Custom job expansion logic
-- **Production-ready** - Observability, testing, documentation
+- **Single-process runtime** – Axum API, TaskBroker, and workers live in one binary.
+- **Embedded persistence** – Fjall powers queue, ledger, and DLQ without external brokers.
+- **Channel-fed workers** – Tasks move through bounded `tokio::mpsc` inboxes with round-robin delivery.
+- **Tower middleware** – Retry, rate limit, and graceful shutdown are implemented as Tower layers per worker.
+- **Extensible handlers** – Embedders customize manifest processing + task execution via the handler trait.
+- **Operational tooling** – Idempotency, structured logs, and metrics are first-class in the orchestrator.
+
+## Release Prep Snapshot (2025-11-19)
+
+- ✅ Toolchain validation + full `cargo fmt`/`cargo check`/`cargo test --all`/`cargo clippy --all-targets -- -D warnings` suite passed locally, so lint/test gates are already green ahead of tagging.
+- ✅ `AGENTS.md` documents the release hygiene (docs, linting, secrets) we expect every contributor to follow.
+- 🛠️ Refreshing this overview and `specs/ctx.md` is in progress to keep specs authoritative before README + spec cleanup land.
+- 🧹 Deprecated specs (`queue_single_process_design`, `task_09_development_testing`, `task_10_documentation`) were removed after diverging from the shipping single-process + README-based workflows.
+- ⏳ README refresh, deprecated-spec removal, and the repo-wide secrets sweep are still pending and tracked in `specs/ctx.md`.
 
 ## Architecture Diagram
 
@@ -35,22 +43,21 @@ This document indexes all specifications and provides a complete guide to FetchB
 │  ┌─────────────────┐    ┌──────────────┐   ┌─────────────┐ │
 │  │  Axum API       │    │ Task Broker  │   │  Workers    │ │
 │  │                 │    │              │   │             │ │
-│  │  POST /jobs ────┼───→│ Queue Tasks  │───→ Inbox (mpsc)│ │
-│  │                 │    │              │   │             │ │
-│  │  GET /status    │    │ Round-robin  │   │ Tower       │ │
-│  │                 │    │ delivery     │   │ Middleware  │ │
+│  │  POST /jobs ────┼───→│ Persist task │───→ Inbox (mpsc)│ │
+│  │                 │    │ + assign seq │   │  (Tower svc)│ │
+│  │  GET /status    │    │ Round-robin  │   │             │ │
+│  │                 │    │ delivery     │   │             │ │
 │  └─────────────────┘    └──────────────┘   └─────────────┘ │
 │                                                ↓   ↓         │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │ Fjall Storage (3 databases)                          │   │
 │  │                                                      │   │
-│  │  queue.db/          ledger.db/        dlq.db/       │   │
-│  │  ├─ tasks           ├─ jobs           ├─ failed     │   │
-│  │  └─ metadata        ├─ logs           ├─ metadata   │   │
-│  │                     └─ idempotency    └─ analysis   │   │
+│  │  queue.db/          ledger.db/        dlq.db/        │   │
+│  │  ├─ tasks           ├─ jobs           ├─ failed      │   │
+│  │  └─ metadata        ├─ logs           ├─ metadata    │   │
+│  │                     └─ idempotency    └─ analysis    │   │
 │  │                                                      │   │
-│  │  [Active Queue]     [Job State]       [Failures]    │   │
-│  │   7 day retention   30 day retention  90 day retention│   │
+│  │  [Active Queue]     [Job State]       [Failures]     │   │
 │  └──────────────────────────────────────────────────────┘   │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -61,9 +68,9 @@ This document indexes all specifications and provides a complete guide to FetchB
 - **Web Framework**: Axum 0.8.6 (HTTP API)
 - **Async Runtime**: Tokio 1.48.0 (async/await)
 - **Databases**: Fjall 2.11.2 (embedded KV store, 3 instances)
-- **Middleware**: Tower (retries, rate limiting)
+- **Middleware/Functions Wrapper**: Tower (retries, rate limiting)
 - **Storage**: Arrow object_store 0.12.4 (S3-compatible)
-- **Serialization**: Prost (protobuf), Serde (JSON/TOML)
+- **Serialization**: Prost (protobuf) for queue/DLQ records, Serde for JSON/TOML configs
 - **Configuration**: config, toml, dotenvy
 - **Observability**: tracing, metrics
 
@@ -71,267 +78,44 @@ This document indexes all specifications and provides a complete guide to FetchB
 
 ### Core Implementation
 
-| File | Description | Status | Lines |
-|------|-------------|--------|-------|
-| [task_01_api_contract.md](task_01_api_contract.md) | HTTP API endpoints, validation, request/response contracts | ✅ Implemented | ~500 |
-| [task_02_handlers.md](task_02_handlers.md) | Handler trait system for custom job expansion logic | ✅ Implemented | ~400 |
-| [task_03_queue_workers.md](task_03_queue_workers.md) | Queue/DLQ databases, TaskBroker, Tower-based workers | 📝 New Spec | 916 |
-| [task_04_ledger.md](task_04_ledger.md) | Job state persistence, logs, idempotency keys | ✅ Implemented | 779 |
-| [task_05_configuration.md](task_05_configuration.md) | Config loading (TOML + env), validation, proxy resolution | ✅ Implemented | ~600 |
+| File | Description | Status |
+|------|-------------|--------|
+| [task_01_api_contract.md](task_01_api_contract.md) | HTTP API endpoints, validation, request/response contracts | ✅ Implemented |
+| [task_02_handlers.md](task_02_handlers.md) | Handler pipeline + worker integration | ✅ Implemented |
+| [task_03_queue_workers.md](task_03_queue_workers.md) | Fjall queue/DLQ schema, TaskBroker, Tower-based workers | ✅ Implemented |
+| [task_04_ledger.md](task_04_ledger.md) | Job state persistence, logs, idempotency keys | ✅ Implemented |
+| [task_05_configuration.md](task_05_configuration.md) | Config loading (TOML + env), validation, proxy resolution | ✅ Implemented |
 
 ### Supporting Systems
 
-| File | Description | Status | Lines |
-|------|-------------|--------|-------|
-| [task_06_storage.md](task_06_storage.md) | S3-compatible storage abstraction, handler overrides | ✅ Implemented | ~300 |
-| [task_07_failure_handling.md](task_07_failure_handling.md) | Error taxonomy, retry policies, DLQ rules | 📝 Update needed | ~400 |
-| [task_08_observability.md](task_08_observability.md) | Metrics, structured logging, tracing integration | 📝 Update needed | ~400 |
+| File | Description | Status |
+|------|-------------|--------|
+| [task_06_storage.md](task_06_storage.md) | S3-compatible storage abstraction, handler overrides | ✅ Implemented |
+| [task_07_failure_handling.md](task_07_failure_handling.md) | Error taxonomy, retry policies, DLQ rules | 🛠️ Refresh in progress |
+| [task_08_observability.md](task_08_observability.md) | Metrics, structured logging, tracing integration | 🛠️ Refresh in progress |
 
 ### Development & Operations
 
-| File | Description | Status | Lines |
-|------|-------------|--------|-------|
-| [task_09_development_testing.md](task_09_development_testing.md) | Dev environment (Docker), integration tests, load testing | 📝 New Spec | ~800 |
-| [task_10_documentation.md](task_10_documentation.md) | Deployment guides, runbooks, API documentation | 📝 Update needed | ~300 |
-
-**Total**: 10 specifications (consolidated from 14)
-
-### Removed/Merged Specifications
-
-- ~~task_06 (Axum Integration)~~ → Merged into task_01 (redundant with API contract)
-- ~~task_07 (Iggy Client)~~ → **Deleted** (Iggy removed, using in-memory channels)
-- ~~task_08 (Worker)~~ → Merged into task_03 (now comprehensive queue/worker spec)
-- ~~task_12 (Dev Environment)~~ → Merged into task_09
-- ~~task_13 (Testing)~~ → Merged into task_09
-
-## Specification Glossary
-
-### task_01_api_contract.md
-**API Contract & Validation**
-
-Defines the HTTP API surface:
-- `POST /jobs` - Submit job manifests
-- `GET /operators/jobs/{job_id}` - Query job status
-- `GET /operators/jobs/{job_id}/logs` - Stream job logs
-- `GET /operators/health` - Health check endpoint
-
-Covers request validation, header extraction, content encoding, size limits, and error responses.
-
-**Key Topics**: Axum handlers, request validation, manifest schema, error codes
-
----
-
-### task_02_handlers.md
-**Handler Trait System**
-
-Defines the `JobHandler` trait for custom manifest expansion:
-- `prepare()` - Validate and prepare manifest
-- `build_tasks()` - Expand manifest into download tasks
-
-Includes `DefaultHandler` implementation, handler registry, and configuration.
-
-**Key Topics**: Trait definition, task expansion, handler configuration, type safety
-
----
-
-### task_03_queue_workers.md
-**Queue & Worker System** ⭐ *Comprehensive*
-
-The core of FetchBox's task processing:
-
-**Fjall Queue (queue.db)**:
-- Sequential task storage with u64 IDs
-- Atomic sequence counter
-- 7-day retention
-
-**Fjall DLQ (dlq.db)**:
-- Isolated failure storage
-- Failure analytics by error code
-- 90-day retention
-- Task replay capability
-
-**Task Broker**:
-- In-memory mpsc channels
-- Round-robin distribution
-- Backpressure via bounded channels
-
-**Worker Pool**:
-- Tower Service implementation
-- Retry middleware (exponential backoff)
-- Rate limiting per worker
-- Graceful shutdown
-
-**Key Topics**: Fjall databases, mpsc channels, Tower middleware, protobuf schemas
-
----
-
-### task_04_ledger.md
-**Ledger Database**
-
-Job state persistence (ledger.db):
-
-**Partitions**:
-- `jobs` - Job snapshots (JobState, progress counters)
-- `logs` - Structured logs per job (with offsets)
-- `idempotency` - Idempotency key mapping
-
-**Operations**:
-- Job CRUD (create, read, update)
-- Log append and query
-- Idempotency checking
-- Pruning/retention
-
-**Key Topics**: Job snapshots, log streaming, idempotency, retention policies
-
----
-
-### task_05_configuration.md
-**Configuration System**
-
-Layered configuration loading:
-- Defaults → TOML file → .env file → Environment variables
-
-**Config Sections**:
-- Server (bind address)
-- Queue (worker count, retries, rate limits)
-- Ledger (paths, retention)
-- DLQ (path, retention, size limits)
-- Storage (S3 credentials, buckets)
-- Handlers (job type mappings)
-- Proxies (pools, fallbacks)
-
-**Validation**:
-- Cross-field validation
-- Proxy cycle detection
-- Handler reference checking
-
-**Key Topics**: Config loading, validation, proxy resolution, secrets management
-
----
-
-### task_06_storage.md
-**Storage Abstraction**
-
-S3-compatible storage via Arrow object_store:
-
-**Features**:
-- Manifest upload/download
-- Resource streaming upload
-- Handler storage overrides (custom bucket/key)
-- Multipart upload support
-- Error classification
-
-**Storage Keys**:
-- Manifests: `manifests/{job_type}/{job_id}/metadata.json`
-- Resources: `resources/{job_type}/{job_id}/{resource_id}`
-
-**Key Topics**: Object store integration, streaming uploads, handler overrides
-
----
-
-### task_07_failure_handling.md
-**Failure Taxonomy & DLQ**
-
-Error classification and handling:
-
-**Error Categories**:
-- Transient (network, 5xx) → Retry
-- Permanent (4xx, DNS) → DLQ immediately
-- Throttled (429) → Backoff
-
-**Retry Strategy**:
-- Tower retry middleware
-- Exponential backoff
-- Configurable max attempts
-
-**DLQ Rules**:
-- Permanent failures
-- Retry exhaustion
-- Failure analytics
-
-**Key Topics**: Error codes, retry policies, DLQ criteria, Tower integration
-
----
-
-### task_08_observability.md
-**Observability & Metrics**
-
-Structured logging and metrics:
-
-**Logging**:
-- tracing-subscriber with env filter
-- Structured fields (job_id, worker_id, etc.)
-- Log levels (trace, debug, info, warn, error)
-- Log streaming via ledger.db
-
-**Metrics** (Prometheus format):
-- `fetchbox_jobs_accepted_total`
-- `fetchbox_tasks_completed_total`
-- `fetchbox_tasks_failed_total`
-- `fetchbox_queue_depth`
-- `fetchbox_dlq_size`
-- `fetchbox_worker_busy_count`
-
-**Key Topics**: tracing, metrics, Prometheus export, log aggregation
-
----
-
-### task_09_development_testing.md
-**Development Environment & Testing** ⭐ *Consolidated*
-
-Complete development setup:
-
-**Dev Environment**:
-- Docker Compose (MinIO, Prometheus, Grafana)
-- Makefile targets (dev-up, dev-down, run, test)
-- Environment configuration (.env)
-
-**Sample Handler**:
-- Gallery handler example
-- Custom storage hints
-- Proxy configuration
-
-**Integration Tests**:
-- End-to-end pipeline tests
-- Idempotency testing
-- Retry and DLQ testing
-- Test helpers and utilities
-
-**Load Testing**:
-- K6 scripts
-- Performance benchmarks
-
-**CI/CD**:
-- GitHub Actions workflows
-- Automated testing
-
-**Key Topics**: Docker Compose, integration tests, load testing, CI/CD
-
----
-
-### task_10_documentation.md
-**Documentation & Runbooks**
-
-Operator and developer documentation:
-
-**Deployment Guides**:
-- Single instance deployment
-- Multi-instance with load balancer
-- Configuration best practices
-
-**Runbooks**:
-- Common operations
-- Troubleshooting
-- DLQ management
-- Backup/restore procedures
-
-**API Documentation**:
-- OpenAPI/Swagger specs
-- Client examples (curl, SDK)
-
-**Key Topics**: Deployment, operations, troubleshooting, API docs
-
----
+- Legacy specs for development/test workflows and documentation runbooks were removed (`task_09` + `task_10`) because they referenced the old Docker Compose/Iggy era; current guidance now lives in `README.md`, `AGENTS.md`, and the living plan in `specs/ctx.md`.
+
+## Specification Summaries
+
+- **task_01_api_contract.md** – Defines the Axum endpoints (`POST /jobs`, operator status + health), header semantics, manifest validation, and error responses.
+- **task_02_handlers.md** – Documents the single-process handler lifecycle (prepare/store/build/handle/finalize) and how it feeds the Fjall queue + worker inboxes.
+- **task_03_queue_workers.md** – Covers Fjall queue/DLQ schema, TaskBroker channel fan-out, Tower-based workers, and retry/termination behavior, matching the shipping implementation (bounded inboxes + Fjall-backed sequencing).
+- **task_04_ledger.md** – Explains ledger partitions (jobs, logs, idempotency) and how job state transitions are persisted.
+- **task_05_configuration.md** – Details config layering (defaults, file, env) plus validation and proxy resolution.
+- **task_06_storage.md** – Describes the object storage abstraction, default in-memory backend, and handler overrides.
+- **task_07_failure_handling.md** – Sets the error taxonomy, retry budget, DLQ policies, and alerting hooks; refresh work is queued to capture the new S3 timeout/DLQ signals exercised by `examples/httpbin_minio`.
+- **task_08_observability.md** – Enumerates metrics, tracing, and structured logging expectations for API, broker, and workers; the release refresh will map these expectations to concrete `tracing` spans + Fjall metrics.
+- **Development/testing + doc runbooks** – The stale specs that referenced Docker Compose, Makefiles, and Iggy tooling have been removed to avoid contradictions; the release plan now tracks README + AGENTS updates directly.
+
+## Examples & Validation
+
+- `examples/httpbin_minio` renders a temporary config, rewrites manifest storage so manifests and resources land under `s3://fetchbox-httpbin/YYYY/MM/DD/httpbin_minio/`, and spins up three workers to mirror the production parallelism.
+- The StorageClient now honors `storage.provider = "s3"` by instantiating the real S3 backend (pulling credentials from the environment), so the example exercises the entire persistence pipeline.
+- `README.md` documents the runbook (start MinIO, export credentials, run the example, inspect the bucket) and the example highlights both success and timeout failure paths plus Fjall/DLQ state for inspection.
+- `timeout.json` provides an intentional failure to prove DLQ/error handling; verbose `lsm_tree` logs stay suppressed so operators focus on FetchBox/Fjall events.
 
 ## Data Flow
 
@@ -400,22 +184,6 @@ proxy.primary = "residential-us"
 storage.bucket = "fetchbox-artifacts"
 ```
 
-## Implementation Status
-
-### ✅ Completed (6 specs)
-- task_01 - API Contract
-- task_02 - Handlers
-- task_04 - Ledger
-- task_05 - Configuration
-- task_06 - Storage
-- task_09 - Development & Testing
-
-### 📝 New/Updated Specs (4 specs)
-- task_03 - Queue & Workers (new comprehensive spec)
-- task_07 - Failure Handling (needs Tower retry updates)
-- task_08 - Observability (needs ledger log integration)
-- task_10 - Documentation (needs single-process deployment guide)
-
 ## Scaling Strategy
 
 ### Vertical Scaling
@@ -449,18 +217,6 @@ Each instance is independent with its own queue.db.
 ## Trade-offs
 
 ⚠️ **Not distributed** - Workers tied to API instance
-⚠️ **No work stealing** - Tasks stay with their instance
+⚠️ **No cross-instance rebalancing** - Tasks published to one instance stay there; scaling uses external routing
 
 **Mitigation**: These trade-offs are acceptable for most use cases. Horizontal scaling provides sufficient capacity.
-
-## Next Steps
-
-1. **Complete remaining implementations** (task_03 - Queue & Workers)
-2. **Update specs** (task_07, 08, 10 for new architecture)
-3. **Integration testing** (end-to-end pipeline verification)
-4. **Production deployment** (single instance → multi-instance)
-
----
-
-**Last Updated**: 2025-11-09
-**Architecture Version**: v2 (Single-Process Design)

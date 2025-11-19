@@ -8,6 +8,7 @@ use super::{
     validation::ManifestValidationError,
 };
 use crate::api::error::ApiError;
+use crate::handlers::StorageHint;
 
 // TODO: Move to config::Settings - this should be configurable per deployment
 const MAX_PAYLOAD_SIZE: usize = 5 * 1024 * 1024; // 5MB
@@ -72,7 +73,11 @@ pub async fn ingest_job(
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| ApiError::InvalidPayload("X-Fetchbox-Tenant header is required".to_string()))?;
+        .ok_or_else(|| {
+            ApiError::InvalidPayload(
+                "X-Fetchbox-Tenant header is required".to_string(),
+            )
+        })?;
 
     // Extract optional idempotency key (for safe retries)
     let idempotency_key = headers
@@ -83,18 +88,17 @@ pub async fn ingest_job(
 
     // Idempotency check: if we've seen this key before, return the existing job
     // This allows clients to safely retry POST requests without creating duplicates
-    if let Some(ref key) = idempotency_key {
-        if let Ok(Some(existing_job_id)) = state.store.get_idempotent(key) {
-            if let Ok(Some(existing_snapshot)) = state.store.get(&existing_job_id) {
-                let response = super::models::JobAcceptedResponse {
-                    job_id: existing_snapshot.job_id,
-                    manifest_key: existing_snapshot.manifest_key,
-                    resource_count: existing_snapshot.resource_total,
-                };
+    if let Some(ref key) = idempotency_key
+        && let Ok(Some(existing_job_id)) = state.store.get_idempotent(key)
+        && let Ok(Some(existing_snapshot)) = state.store.get(&existing_job_id)
+    {
+        let response = super::models::JobAcceptedResponse {
+            job_id: existing_snapshot.job_id,
+            manifest_key: existing_snapshot.manifest_key,
+            resource_count: existing_snapshot.resource_total,
+        };
 
-                return Ok((axum::http::StatusCode::ACCEPTED, Json(response)));
-            }
-        }
+        return Ok((axum::http::StatusCode::ACCEPTED, Json(response)));
     }
 
     // Read request body (decompression already handled by RequestDecompressionLayer middleware)
@@ -112,8 +116,7 @@ pub async fn ingest_job(
     // Full path: {resource_key_prefix}{manifest_file}
     let storage_key = format!(
         "{}{}",
-        manifest.storage.resource_key_prefix,
-        manifest.storage.manifest_file
+        manifest.storage.resource_key_prefix, manifest.storage.manifest_file
     );
     let upload_result = state
         .storage
@@ -167,21 +170,41 @@ pub async fn ingest_job(
     let handler = state.registry.get(job_type).unwrap(); // Safe: already validated above
 
     // Wrap manifest with context for handler
+    let manifest_envelope = crate::handlers::types::ManifestEnvelope {
+        job_id: job_id.clone(),
+        job_type: job_type.to_string(),
+        tenant: tenant.clone(),
+        manifest: manifest.clone(),
+        manifest_location: Some(manifest_key.clone()),
+        received_at: timestamp,
+    };
     let prepared = crate::handlers::types::PreparedManifest {
-        context: crate::handlers::types::ManifestContext {
-            job_id: job_id.clone(),
-            job_type: job_type.to_string(),
-            manifest: manifest.clone(),
-        },
-        handler_data: None, // Reserved for handler-specific state
+        envelope: manifest_envelope,
+        handler_context: serde_json::Value::Null, // Reserved for handler-specific state
     };
 
     // Generate tasks - this is where job-specific logic transforms
     // the manifest into executable work units
-    let tasks = handler
+    let mut tasks = handler
         .build_tasks(prepared)
         .await
         .map_err(|e| ApiError::Internal(format!("Handler failed: {}", e)))?;
+
+    // Respect manifest-provided storage prefix when handlers have not set an override.
+    if let Some(prefix) =
+        normalize_storage_prefix(&manifest.storage.resource_key_prefix)
+    {
+        let bucket = state.storage.bucket.clone();
+        for task in &mut tasks {
+            if task.storage_hint.is_none() {
+                task.storage_hint = Some(StorageHint {
+                    bucket: bucket.clone(),
+                    key_prefix: prefix.clone(),
+                    object_metadata: None,
+                });
+            }
+        }
+    }
 
     // Create task context for proto conversion (shared across all tasks in this job)
     let task_context = crate::handlers::TaskContext {
@@ -197,13 +220,9 @@ pub async fn ingest_job(
         // Convert handler DownloadTask to protobuf DownloadTask
         let proto_task = task.to_proto(&task_context);
 
-        state
-            .broker
-            .enqueue(proto_task)
-            .await
-            .map_err(|e| {
-                ApiError::Internal(format!("Failed to enqueue task: {}", e))
-            })?;
+        state.broker.enqueue(proto_task).await.map_err(|e| {
+            ApiError::Internal(format!("Failed to enqueue task: {}", e))
+        })?;
 
         state.metrics.task_published();
     }
@@ -223,6 +242,16 @@ pub async fn ingest_job(
 /// Maps manifest validation errors to API errors
 fn map_manifest_error(err: ManifestValidationError) -> ApiError {
     ApiError::InvalidPayload(err.to_string())
+}
+
+/// Trim trailing separators so storage prefixes remain consistent.
+fn normalize_storage_prefix(prefix: &str) -> Option<String> {
+    let trimmed = prefix.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.trim_end_matches('/').to_string())
+    }
 }
 
 /// Reads request body and validates size
@@ -270,7 +299,7 @@ pub async fn get_job(
 ///
 /// Returns 503 Service Unavailable if any component is unhealthy.
 /// Returns 200 OK otherwise.
-pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn health(State(_state): State<AppState>) -> impl IntoResponse {
     use std::collections::HashMap;
 
     let mut components = HashMap::new();
@@ -285,11 +314,7 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
     // For now, if we can respond, we're healthy
 
     let all_healthy = components.values().all(|status| status == "healthy");
-    let overall_status = if all_healthy {
-        "healthy"
-    } else {
-        "unhealthy"
-    };
+    let overall_status = if all_healthy { "healthy" } else { "unhealthy" };
 
     let status_code = if all_healthy {
         axum::http::StatusCode::OK

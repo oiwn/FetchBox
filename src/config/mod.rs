@@ -38,8 +38,8 @@ mod validation;
 pub use crate::humanize::ByteSize;
 pub use models::{
     ApiLimits, Config, HandlerConfig, ProxyConfig, ProxyEndpoint, ProxyPoolConfig,
-    ResolvedProxyPool, RetentionConfig, ServerConfig, StorageConfig, StorageProvider,
-    TelemetryConfig,
+    QueueConfig, ResolvedProxyPool, RetentionConfig, ServerConfig, StorageConfig,
+    StorageProvider, TelemetryConfig, WorkerRuntimeConfig,
 };
 pub use resolver::{ProxyGraph, ResolverError};
 pub use validation::ValidationError;
@@ -81,7 +81,9 @@ impl Config {
     ///
     /// Useful for testing with custom configuration files.
     pub fn load_from_path(path: std::path::PathBuf) -> Result<Self, ConfigError> {
-        let config = sources::load_from_sources(path)?;
+        let _ = dotenvy::dotenv();
+        let mut config = sources::load_from_sources(path)?;
+        sources::load_secrets(&mut config);
         validation::validate(&config)?;
         Ok(config)
     }
@@ -136,7 +138,9 @@ proxy_pool = "nonexistent"
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            ConfigError::ValidationError(ValidationError::InvalidProxyPoolReference { .. })
+            ConfigError::ValidationError(
+                ValidationError::InvalidProxyPoolReference { .. }
+            )
         ));
     }
 
@@ -178,8 +182,10 @@ fallbacks = []
         let toml_content = r#"
 [server]
 bind_addr = "0.0.0.0:8080"
-max_manifest_bytes = "5MB"
 fjall_path = "data/ledger"
+
+[server.api]
+max_payload_bytes = "5MB"
 
 [iggy]
 endpoint = "iggy://localhost:8090"

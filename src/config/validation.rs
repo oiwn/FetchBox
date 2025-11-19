@@ -1,6 +1,9 @@
 use super::models::{Config, StorageProvider};
+#[cfg(test)]
 use crate::humanize::ByteSize;
-use std::collections::{BTreeMap, HashMap, HashSet};
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -20,11 +23,10 @@ pub enum ValidationError {
     #[error("No handlers configured (at least 'default' handler is required)")]
     NoHandlersConfigured,
 
-    #[error("Storage provider is S3 but missing credentials (access_key or secret_key)")]
+    #[error(
+        "Storage provider is S3 but missing credentials (access_key or secret_key)"
+    )]
     MissingS3Credentials,
-
-    #[error("Invalid Iggy endpoint scheme '{scheme}', expected 'iggy://' or 'tcp://'")]
-    InvalidIggyScheme { scheme: String },
 
     #[error("Retention TTL must be positive: {field} = {value}")]
     InvalidRetentionTTL { field: String, value: u32 },
@@ -53,9 +55,7 @@ fn validate_handlers(config: &Config) -> Result<(), ValidationError> {
         // Skip proxy validation if no proxy_pool configured (v0 allows optional proxies)
         if let Some(ref proxy_pool) = handler_config.proxy_pool {
             // Extract pool name from proxy_pool (may be "pools/default" or just "default")
-            let pool_name = proxy_pool
-                .strip_prefix("pools/")
-                .unwrap_or(proxy_pool);
+            let pool_name = proxy_pool.strip_prefix("pools/").unwrap_or(proxy_pool);
 
             if !config.proxy.pools.contains_key(pool_name) {
                 return Err(ValidationError::InvalidProxyPoolReference {
@@ -87,7 +87,12 @@ fn validate_proxy_pools(config: &Config) -> Result<(), ValidationError> {
 
     // Detect cycles using DFS
     for pool_name in config.proxy.pools.keys() {
-        detect_cycles(pool_name, &config.proxy.pools, &mut HashSet::new(), &mut Vec::new())?;
+        detect_cycles(
+            pool_name,
+            &config.proxy.pools,
+            &mut HashSet::new(),
+            &mut Vec::new(),
+        )?;
     }
 
     Ok(())
@@ -142,10 +147,11 @@ fn validate_manifest_size(config: &Config) -> Result<(), ValidationError> {
 
 /// Validate storage credentials when provider is S3
 fn validate_storage(config: &Config) -> Result<(), ValidationError> {
-    if config.storage.provider == StorageProvider::S3 {
-        if config.storage.access_key.is_none() || config.storage.secret_key.is_none() {
-            return Err(ValidationError::MissingS3Credentials);
-        }
+    if config.storage.provider == StorageProvider::S3
+        && (config.storage.access_key.is_none()
+            || config.storage.secret_key.is_none())
+    {
+        return Err(ValidationError::MissingS3Credentials);
     }
 
     Ok(())
@@ -185,11 +191,10 @@ mod tests {
             "default".to_string(),
             HandlerConfig {
                 handler: "test::Handler".to_string(),
-                proxy_pool: "default".to_string(),
                 storage_bucket: None,
-                key_prefix: None,
                 default_headers: BTreeMap::new(),
                 options: serde_json::Value::Null,
+                proxy_pool: Some("default".to_string()),
             },
         );
 
@@ -206,7 +211,7 @@ mod tests {
 
         Config {
             server: ServerConfig::default(),
-            iggy: IggyConfig::default(),
+            queue: QueueConfig::default(),
             storage: StorageConfig::default(),
             handlers,
             proxy: ProxyConfig { pools },
@@ -233,7 +238,8 @@ mod tests {
     #[test]
     fn test_invalid_proxy_pool_reference() {
         let mut config = create_test_config();
-        config.handlers.get_mut("default").unwrap().proxy_pool = "nonexistent".to_string();
+        config.handlers.get_mut("default").unwrap().proxy_pool =
+            Some("nonexistent".to_string());
 
         let result = validate(&config);
         assert!(matches!(
@@ -306,22 +312,7 @@ mod tests {
         config.storage.access_key = None;
 
         let result = validate(&config);
-        assert!(matches!(
-            result,
-            Err(ValidationError::MissingS3Credentials)
-        ));
-    }
-
-    #[test]
-    fn test_invalid_iggy_scheme() {
-        let mut config = create_test_config();
-        config.iggy.endpoint = "http://localhost:8090".to_string();
-
-        let result = validate(&config);
-        assert!(matches!(
-            result,
-            Err(ValidationError::InvalidIggyScheme { .. })
-        ));
+        assert!(matches!(result, Err(ValidationError::MissingS3Credentials)));
     }
 
     #[test]

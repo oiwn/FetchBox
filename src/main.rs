@@ -13,7 +13,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match cli.command {
         Commands::Api(args) => api::run(args.address, args.ledger_path).await?,
         Commands::Worker => {
-            eprintln!("Worker mode is temporarily disabled during architecture transition");
+            eprintln!(
+                "Worker mode is temporarily disabled during architecture transition"
+            );
             std::process::exit(1);
         }
     }

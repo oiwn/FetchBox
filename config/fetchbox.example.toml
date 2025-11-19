@@ -28,10 +28,33 @@
 bind_addr = "0.0.0.0:8080"
 
 # Maximum manifest size (default: 5MB, enforced by validation)
-max_manifest_bytes = "5MB"
+api.max_payload_bytes = "5MB"
 
 # Path to Fjall ledger storage
 fjall_path = "data/ledger"
+
+# ============================================================================
+# Queue & Worker Configuration
+# ============================================================================
+[queue]
+# Path for persisted task log (Fjall)
+path = "data/queue"
+
+# Number of async worker tasks spawned per process
+workers = 8
+
+# Size of each worker's in-memory inbox (bounded mpsc channel)
+channel_size = 128
+
+[queue.worker]
+# Max HTTP downloads per second per worker (rate limiter)
+rate_limit_per_worker = 16
+
+# Retry attempts per task (excluding initial try)
+max_retries = 3
+
+# Base retry backoff in milliseconds (exponential)
+retry_backoff_ms = 500
 
 # ============================================================================
 # Storage Configuration

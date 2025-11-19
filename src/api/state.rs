@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::handlers::HandlerRegistry;
-use crate::ledger::FjallStore;
+use crate::ledger::LedgerStorage;
 use crate::observability::Metrics;
 use crate::queue::TaskBroker;
 use crate::storage::StorageClient;
@@ -11,7 +11,7 @@ use crate::storage::StorageClient;
 pub struct AppState {
     pub config: Arc<Config>,
     pub registry: Arc<HandlerRegistry>,
-    pub store: Arc<FjallStore>,
+    pub store: Arc<LedgerStorage>,
     pub storage: Arc<StorageClient>,
     pub broker: Arc<TaskBroker>,
     pub metrics: Arc<Metrics>,
@@ -21,7 +21,7 @@ impl AppState {
     pub fn new(
         config: Config,
         registry: HandlerRegistry,
-        store: FjallStore,
+        store: LedgerStorage,
         storage: StorageClient,
         broker: Arc<TaskBroker>,
     ) -> Self {
@@ -35,4 +35,3 @@ impl AppState {
         }
     }
 }
-

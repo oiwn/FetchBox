@@ -1,5 +1,7 @@
 pub mod broker;
-pub mod store;
+pub mod dlq_storage;
+pub mod tasks_storage;
 
 pub use broker::{TaskBroker, TaskEnvelope};
-pub use store::FjallQueue;
+pub use dlq_storage::{DlqError, DlqStorage};
+pub use tasks_storage::{QueueError, TasksStorage};

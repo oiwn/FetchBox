@@ -43,7 +43,7 @@ impl ByteSize {
                 if remainder == 0 || i == 0 {
                     return format!("{}{}", value, unit);
                 } else {
-                    let decimal = (remainder * 10 / divisor) as u64;
+                    let decimal = remainder * 10 / divisor;
                     if decimal > 0 {
                         return format!("{}.{}{}", value, decimal, unit);
                     }
@@ -67,7 +67,9 @@ impl<'de> Deserialize<'de> for ByteSize {
             type Value = ByteSize;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a byte size as string (e.g., \"5MB\", \"1GB\") or integer")
+                formatter.write_str(
+                    "a byte size as string (e.g., \"5MB\", \"1GB\") or integer",
+                )
             }
 
             fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
@@ -101,11 +103,12 @@ impl FromStr for ByteSize {
         }
 
         // Parse with unit suffix
-        let (num_str, unit) = if let Some(pos) = s.find(|c: char| !c.is_ascii_digit()) {
-            (&s[..pos], &s[pos..])
-        } else {
-            return Err(ParseError::InvalidFormat(s.to_string()));
-        };
+        let (num_str, unit) =
+            if let Some(pos) = s.find(|c: char| !c.is_ascii_digit()) {
+                (&s[..pos], &s[pos..])
+            } else {
+                return Err(ParseError::InvalidFormat(s.to_string()));
+            };
 
         let num: u64 = num_str.parse()?;
 
@@ -143,25 +146,40 @@ mod tests {
     fn test_parse_megabytes() {
         assert_eq!("5MB".parse::<ByteSize>().unwrap().as_u64(), 5 * 1024 * 1024);
         assert_eq!("5M".parse::<ByteSize>().unwrap().as_u64(), 5 * 1024 * 1024);
-        assert_eq!("5MiB".parse::<ByteSize>().unwrap().as_u64(), 5 * 1024 * 1024);
+        assert_eq!(
+            "5MiB".parse::<ByteSize>().unwrap().as_u64(),
+            5 * 1024 * 1024
+        );
     }
 
     #[test]
     fn test_parse_gigabytes() {
-        assert_eq!("50GB".parse::<ByteSize>().unwrap().as_u64(), 50 * 1024 * 1024 * 1024);
-        assert_eq!("1G".parse::<ByteSize>().unwrap().as_u64(), 1024 * 1024 * 1024);
+        assert_eq!(
+            "50GB".parse::<ByteSize>().unwrap().as_u64(),
+            50 * 1024 * 1024 * 1024
+        );
+        assert_eq!(
+            "1G".parse::<ByteSize>().unwrap().as_u64(),
+            1024 * 1024 * 1024
+        );
     }
 
     #[test]
     fn test_parse_terabytes() {
-        assert_eq!("1TB".parse::<ByteSize>().unwrap().as_u64(), 1024 * 1024 * 1024 * 1024);
+        assert_eq!(
+            "1TB".parse::<ByteSize>().unwrap().as_u64(),
+            1024 * 1024 * 1024 * 1024
+        );
     }
 
     #[test]
     fn test_to_human_readable() {
         assert_eq!(ByteSize(1024).to_human_readable(), "1KB");
         assert_eq!(ByteSize(5 * 1024 * 1024).to_human_readable(), "5MB");
-        assert_eq!(ByteSize(50 * 1024 * 1024 * 1024).to_human_readable(), "50GB");
+        assert_eq!(
+            ByteSize(50 * 1024 * 1024 * 1024).to_human_readable(),
+            "50GB"
+        );
     }
 
     #[test]

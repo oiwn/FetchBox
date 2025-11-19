@@ -1,10 +1,10 @@
-/// Key layout and encoding utilities for Fjall partitions
-///
-/// Partition structure:
-/// - `jobs`: job:{job_id} -> JobSnapshot (JSON)
-/// - `logs`: log:{job_id}:{offset:016} -> LogEntry (JSON)
-/// - `idempotency`: idem:{key} -> job_id (string)
-/// - `metadata`: meta:{key} -> value (JSON/string)
+//! Key layout and encoding utilities for Fjall partitions
+//!
+//! Partition structure:
+//! - `jobs`: job:{job_id} -> JobSnapshot (JSON)
+//! - `logs`: log:{job_id}:{offset:016} -> LogEntry (JSON)
+//! - `idempotency`: idem:{key} -> job_id (string)
+//! - `metadata`: meta:{key} -> value (JSON/string)
 
 /// Encode a job key: job:{job_id}
 pub fn encode_job_key(job_id: &str) -> Vec<u8> {
