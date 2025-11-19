@@ -1,0 +1,46 @@
+# FetchBox config tuned for the httpbin example.
+#
+# The example replaces __LEDGER_DIR__ and __QUEUE_DIR__ with real temporary
+# paths at runtime before pointing FETCHBOX_CONFIG at the rendered file.
+# You can also copy this file, fill in concrete paths, and run the binary
+# manually if you want to inspect the system step-by-step.
+
+[server]
+bind_addr = "127.0.0.1:8080"
+fjall_path = "__LEDGER_DIR__"
+
+[server.api]
+max_payload_bytes = "1MB"
+max_resources_per_manifest = 32
+
+[queue]
+path = "__QUEUE_DIR__"
+workers = 1
+channel_size = 16
+
+[queue.worker]
+rate_limit_per_worker = 8
+max_retries = 1
+retry_backoff_ms = 200
+
+[storage]
+provider = "local"
+bucket = "fetchbox-httpbin"
+
+[handlers.default]
+handler = "fetchbox::handlers::DefaultHandler"
+proxy_pool = "direct"
+
+[proxy.pools.direct]
+primary = []
+fallbacks = []
+retry_backoff_ms = 0
+max_retries = 0
+
+[retention]
+job_ttl_days = 1
+ledger_max_bytes = "1GB"
+logs_ttl_days = 1
+
+[telemetry]
+metrics_addr = "127.0.0.1:9091"
