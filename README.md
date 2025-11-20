@@ -81,6 +81,15 @@ This example exercises the full data path (manifest ingest → download → S3 u
 
 Every example lives under `examples/`; follow the instructions in each README/comment block to run them.
 
+### Custom Handler Registry Demo
+Need to validate the handler trait without booting the entire service? The `custom_handlers` example registers a bespoke job type, derives album metadata from a manifest, and prints the resulting `DownloadTask` values:
+
+```bash
+cargo run --example custom_handlers
+```
+
+This walkthrough exercises `HandlerRegistry::register` and the current handler trait. The main runtime still instantiates `HandlerRegistry::with_defaults()` inside `api::server`, so wiring a custom registry into `/jobs` today requires editing that bootstrap code.
+
 ## Development & Testing
 
 Before opening a PR or cutting a release, run the complete workflow:
