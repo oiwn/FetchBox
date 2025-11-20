@@ -28,6 +28,7 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt
+      - run: rustup component add rustfmt
       - run: cargo fmt
 
   # Check for typos in the codebase.
@@ -41,12 +42,6 @@ jobs:
 
   # Check for any disallowed dependencies in the codebase due to license / security issues.
   # See <https://github.com/EmbarkStudios/cargo-deny>
-  dependencies:
-    name: Check Dependencies
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
 
   # Run cargo clippy.
   lint-clippy:
@@ -60,6 +55,8 @@ jobs:
       - uses: arduino/setup-protoc@v2
         with:
           version: "27.1"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: rustup component add clippy
       - run: cargo clippy
 
   # Run markdownlint on all markdown files in the repository.
@@ -91,6 +88,7 @@ jobs:
       - uses: arduino/setup-protoc@v2
         with:
           version: "27.1"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo check
 
@@ -110,6 +108,7 @@ jobs:
       - uses: arduino/setup-protoc@v2
         with:
           version: "27.1"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: "actions-rs/cargo@v1"
         with:
@@ -133,6 +132,7 @@ jobs:
       - uses: arduino/setup-protoc@v2
         with:
           version: "27.1"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: "actions-rs/cargo@v1"
         with:
