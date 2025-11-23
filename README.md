@@ -90,6 +90,21 @@ cargo run --example custom_handlers
 
 This walkthrough exercises `HandlerRegistry::register` and the current handler trait. The main runtime still instantiates `HandlerRegistry::with_defaults()` inside `api::server`, so wiring a custom registry into `/jobs` today requires editing that bootstrap code.
 
+### Local Benchmark (in-memory)
+Use `bench_local` to probe worker throughput without external deps. It spins an in-process Axum blob fixture, writes to the in-memory storage backend, and reports tasks/sec plus data transfer:
+
+```bash
+cargo run --release --example bench_local -- --quiet
+```
+
+Tunables (env):
+- `BENCH_JOBS` (default 20) and `BENCH_TASKS_PER_JOB` (default 50)
+- `BENCH_BLOB_BYTES` (default 1_000_000) payload size
+- `BENCH_WORKERS` (default 8) and `BENCH_RATE_LIMIT` (default 32 req/s per worker)
+- `BENCH_SUBMIT_CONCURRENCY` (default 4) manifest submit parallelism
+
+Output includes total tasks, elapsed, tasks/sec, total MB, and MB/sec. Use `BENCH_RATE_LIMIT=500` or higher worker counts to remove throttling and observe peak throughput; `--quiet` raises the log filter to reduce stdout noise.
+
 ## Development & Testing
 
 Before opening a PR or cutting a release, run the complete workflow:
