@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -27,9 +28,17 @@ pub async fn run(
     address: SocketAddr,
     _ledger_path: String,
 ) -> Result<(), AnyError> {
+    run_with_config_path(address, None).await
+}
+
+/// Run the API using a custom config path (overrides FETCHBOX_CONFIG/default)
+pub async fn run_with_config_path(
+    address: SocketAddr,
+    config_path: Option<PathBuf>,
+) -> Result<(), AnyError> {
     info!("Loading configuration from default sources");
-    let config =
-        Config::load().map_err(|e| format!("Failed to load config: {}", e))?;
+    let config = Config::load_with_path(config_path)
+        .map_err(|e| format!("Failed to load config: {}", e))?;
     run_with_config_inner(address, config, None).await
 }
 
@@ -41,9 +50,20 @@ pub async fn run_until<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    run_with_config_path_until(address, None, shutdown).await
+}
+
+pub async fn run_with_config_path_until<F>(
+    address: SocketAddr,
+    config_path: Option<PathBuf>,
+    shutdown: F,
+) -> Result<(), AnyError>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
     info!("Loading configuration from default sources");
-    let config =
-        Config::load().map_err(|e| format!("Failed to load config: {}", e))?;
+    let config = Config::load_with_path(config_path)
+        .map_err(|e| format!("Failed to load config: {}", e))?;
     run_with_config_inner(address, config, Some(Box::pin(shutdown))).await
 }
 
