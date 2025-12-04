@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(name = "fetchbox")]
@@ -27,4 +28,8 @@ pub struct ApiArgs {
     /// Path to Fjall ledger storage
     #[arg(long, default_value = "data/ledger")]
     pub ledger_path: String,
+
+    /// Path to FetchBox config file (overrides FETCHBOX_CONFIG)
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
 }

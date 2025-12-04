@@ -77,15 +77,20 @@ impl Config {
         Ok(config)
     }
 
+    /// Load configuration from a specific path or fallback to environment/default
+    pub fn load_with_path(
+        config_path: Option<std::path::PathBuf>,
+    ) -> Result<Self, ConfigError> {
+        let config = sources::load_with_path(config_path)?;
+        validation::validate(&config)?;
+        Ok(config)
+    }
+
     /// Load configuration from a specific path
     ///
     /// Useful for testing with custom configuration files.
     pub fn load_from_path(path: std::path::PathBuf) -> Result<Self, ConfigError> {
-        let _ = dotenvy::dotenv();
-        let mut config = sources::load_from_sources(path)?;
-        sources::load_secrets(&mut config);
-        validation::validate(&config)?;
-        Ok(config)
+        Self::load_with_path(Some(path))
     }
 
     /// Get a proxy resolver for this configuration

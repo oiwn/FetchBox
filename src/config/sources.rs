@@ -14,12 +14,17 @@ const ENV_SEPARATOR: &str = "__";
 /// 3. Environment variables from .env file (via dotenvy)
 /// 4. System environment variables (highest priority)
 pub fn load() -> Result<Config, ConfigError> {
+    load_with_path(None)
+}
+
+/// Load configuration with an optional explicit path override
+pub fn load_with_path(config_path: Option<PathBuf>) -> Result<Config, ConfigError> {
     // Load .env file if it exists (ignore errors if file doesn't exist)
     let _ = dotenvy::dotenv();
 
-    let config_path = env::var(CONFIG_ENV_VAR)
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_CONFIG_PATH));
+    let config_path = config_path
+        .or_else(|| env::var(CONFIG_ENV_VAR).map(PathBuf::from).ok())
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
 
     let mut config = load_from_sources(config_path)?;
 
@@ -58,15 +63,25 @@ pub(super) fn load_secrets(config: &mut Config) {
 pub fn load_from_sources(config_path: PathBuf) -> Result<Config, ConfigError> {
     let mut builder = config::Config::builder();
 
+    let resolved_path = if config_path.is_absolute() {
+        config_path.clone()
+    } else {
+        env::current_dir()
+            .map(|cwd| cwd.join(&config_path))
+            .unwrap_or_else(|_| config_path.clone())
+    };
+
     // Start with defaults (handled by struct Default implementations)
     // Add TOML file if it exists (optional)
     if config_path.exists() {
-        tracing::info!("Loading configuration from: {}", config_path.display());
+        tracing::info!(path = %resolved_path.display(), "Loading configuration from file");
         builder = builder.add_source(File::from(config_path).required(false));
     } else {
         tracing::warn!(
-            "Configuration file not found at {}, using defaults and environment overrides",
-            config_path.display()
+            path = %resolved_path.display(),
+            env_var = CONFIG_ENV_VAR,
+            default_path = DEFAULT_CONFIG_PATH,
+            "Configuration file not found; using defaults and environment overrides",
         );
     }
 

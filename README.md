@@ -41,8 +41,10 @@ FetchBox is a single-process download orchestration service: an Axum HTTP API ac
    The server binds to `bind_addr` from the config (default `0.0.0.0:8080`) and immediately starts accepting `POST /jobs` manifests.
 
 ### Configuration Quick Reference
+- Config path precedence: CLI `--config` (or `Config::load_with_path`) → `FETCHBOX_CONFIG` env → `config/fetchbox.toml` relative to the current working directory.
 - `config/fetchbox.example.toml` enumerates every knob (queue paths, worker counts, handler registry, proxy pools, retention policies).
 - Environment overrides follow the `FETCHBOX__SECTION__KEY=value` pattern (e.g., `FETCHBOX__QUEUE__WORKERS=8`).
+- Built-in handlers live in the `fetchbox_handlers` crate; register them under `handlers.*` (e.g., `fetchbox_handlers::default::DefaultManifestHandler`) or supply your own via a custom registry.
 - Storage credentials are never stored in the TOML file—use env vars (`S3_ACCESS_KEY`, `AWS_ACCESS_KEY_ID`, etc.) or a `.env`.
 - The MinIO walkthrough uses `config/httpbin.minio.toml` (template values are replaced at runtime).
 
